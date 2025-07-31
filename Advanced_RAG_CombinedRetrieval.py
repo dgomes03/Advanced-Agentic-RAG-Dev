@@ -8,6 +8,7 @@ import pymupdf as fitz  # PyMuPDF
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from mlx_lm import load, generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
+from mlx_lm.models.cache import make_prompt_cache
 from tqdm import tqdm
 from rank_bm25 import BM25Okapi
 import torch
@@ -297,7 +298,7 @@ class Retriever:
             "You are a query rephraser and expander for document search.\n"
             "Generate *ONLY* three alternative phrasings or expansions "
             "that capture different ways the same question could be asked for retrieving relevant context.\n"
-            "Provide *ONLY* the three phrases.\n\n"
+            "Provide *ONLY* three phrases.\n\n"
         )
         
         message = (
@@ -400,7 +401,7 @@ class Retriever:
             final_context = Generator.summarize_passages(reranked_texts, self.llm_model, self.llm_tokenizer)
         else:
             # Include source filename in context for the LLM
-            final_context = "\n---\n".join([f"\n{chunk}" for chunk, meta in reranked])
+            final_context = "\n---\n".join([f"\n{chunk}" for chunk, meta in reranked]) # desligado temporariamente
             #final_context = "\n---\n".join(
                 #[f"[Source: {meta['filename']}]\n{chunk}" for chunk, meta in reranked])
         return final_context
@@ -464,13 +465,16 @@ class Generator:
         #print("\nFORMATTED PROMPT:")
         #print(prompt)
 
+        #cache = make_prompt_cache(llm_model) # k-v chache
+
         response = generate(
             llm_model, 
             llm_tokenizer, 
             prompt=prompt, 
             max_tokens=MAX_RESPONSE_TOKENS, 
             sampler=sampler, 
-            logits_processors=logits_processors, 
+            logits_processors=logits_processors,
+            #prompt_cache=cache,
             verbose=True)
         return response
 
@@ -583,7 +587,7 @@ if __name__ == "__main__":
 
                 retrieved_context = retriever.combined_retrieval(
                     query,
-                    k=30,
+                    k=20,
                     weight_dense=0.6,
                     weight_sparse=0.4,
                     rerank_top_n=5, # isto é o nº final de chunks q é entregue ao llm

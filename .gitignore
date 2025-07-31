@@ -1,0 +1,6 @@
+# Ignore everything
+*
+
+# But not these files...
+!.gitignore
+!Advanced_RAG_CombinedRetrieval.py
