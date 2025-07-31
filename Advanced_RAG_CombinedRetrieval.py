@@ -408,7 +408,7 @@ class Retriever:
         return final_context
 
 
-class Generator:    
+class Generator:
     @staticmethod
     def summarize_passages(passages, llm_model, llm_tokenizer):
         context = "\n".join(passages)
