@@ -1,0 +1,24 @@
+% Local IspellDict: en
+\chapter{Introduction}\label{ch01:intro}
+
+Welcome! The purpose of this document is to outline the guidelines for creating and formatting seminar papers, as well as Bachelor and Master theses. It will be explained which general formatting rules should be applied for any written submission and how the provided \LaTeX\ template can help produce a well formatted piece of work. Throughout the document, a number of examples will illustrate the structure of an academic work and at the same time show how the template can be used. Note, though, that there are so many aspects of writing a good paper and producing a good-looking result that it is impossible to cover all of them in this guide. For further references on what we expect from seminar participants please consult our Guide to Seminars.
+
+This template consists of a \texttt{main.tex}-file in which all relevant parts are defined. In the \texttt{code} folder, you can include files of algorithms and code blocks that are part of the thesis. In the \texttt{content} folder, you can include all relevant chapters as single \texttt{tex}-files. In the \texttt{figures} folder---as the name already suggests---you can include images and graphics. We advise you to not edit the \texttt{settings} folder. If you need to include any packages which are not part of this template, you can do so in the preamble of \texttt{main.tex}.
+
+You are free to use any \LaTeX\ environment.  Some people prefer local installations and editors under their own control, while others prefer hosted services such as \texttt{Overleaf}\footnote{\url{https://www.overleaf.com}}---due to zero-installation (some students perceive setup of the \texttt{minted} package to be challenging), automated storage, nice user experience, and easy collaboration options. Nevertheless, as usual, gratis hosted solutions come with disadvantages (loss of control and privacy, dependence on a third party). In particular, we advise you to carefully read the Overleaf Privacy Notice, from where we quote:
+
+\begin{quote}
+    When you use Overleaf, we may collect information about that usage and other technical information, such as your IP address, browser type and any referring website addresses. We may combine this automatically collected log information with other information we collect about you and use it to keep a record of our interaction and to enable us to support, personalise and improve Overleaf.~\citep{overleafprivacy}
+\end{quote}
+
+Other environments come with tools such as Chk\TeX\footnote{\url{https://www.nongnu.org/chktex/}} that warn on-the-fly in case of typical beginners' errors related to \LaTeX.
+
+In case of working outside Overleaf, installing this template files is easy. Simply unzip the contents into the folder where your document resides. More advanced users may prefer extracting this file into their local \texttt{texmf} tree, which is the recommended way of installing the template.  Current \TeX\ distributions, such as \TeX\ Live, Mac\TeX\, or Mik\TeX\ provide all required packages.
+
+A frequently asked question is that of length.  While we recommend you talk to your supervisor about your specific case, some general remarks can be made here.  A Bachelor thesis is supposed to have “approximately 40 pages” according to the Examination Rules (PO Bachelor WI 2010).  For Master theses, it is much more difficult to specify a number of pages due to variations in the assigned topics.  Typically, however, a length of about 80 pages seems appropriate. Seminar papers ought to be about 15 pages in length and never exceed 20 pages.
+
+%%% Local Variables:
+%%% mode: latex
+%%% TeX-master: "../main_thesis"
+%%% TeX-command-extra-options: "-shell-escape"
+%%% End:

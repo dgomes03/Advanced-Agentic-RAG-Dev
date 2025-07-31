@@ -585,7 +585,7 @@ if __name__ == "__main__":
 
                 retrieved_context = retriever.combined_retrieval(
                     query,
-                    k=40,
+                    k=30,
                     weight_dense=0.6,
                     weight_sparse=0.4,
                     rerank_top_n=5, # isto é o nº final de chunks q é entregue ao llm
