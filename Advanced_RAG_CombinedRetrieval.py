@@ -320,21 +320,19 @@ class Retriever:
             prompt=prompt, 
             max_tokens=200,
             verbose=False)
-
-        #response = generate(self.llm_model, self.llm_tokenizer, prompt=prompt, max_tokens=200, verbose=False)
         
         alternatives = []
         
         for line in response.split('\n'):
             line = line.strip('"-•* 0123456789.').strip()
-            if 2 < len(line) < 150:
+            if 2 < len(line):
                 alternatives.append(line)
         if not alternatives:
             alternatives = [query]
         
-        print("=== FINAL ALTERNATIVES ===") # ver as query expansions
-        for alt in alternatives:
-            print(alt)
+        #print("=== FINAL ALTERNATIVES ===") # ver as query expansions
+        #for alt in alternatives:
+        #    print(alt)
         
         return alternatives
 
@@ -463,8 +461,8 @@ class Generator:
         )
 
         # DEBUG: Verify prompt structure
-        print("\nFORMATTED PROMPT:")
-        print(prompt)
+        #print("\nFORMATTED PROMPT:")
+        #print(prompt)
 
         response = generate(
             llm_model, 
@@ -519,7 +517,7 @@ def evaluate_rag_system(indexer, retriever, llm_model, llm_tokenizer, reranker, 
 
 # ==== Main Runtime ====
 if __name__ == "__main__":
-    print("Attempting to load saved multi-vector index and BM25 index...")
+    print("Attempting to load saved FAISS index and BM25 index...")
     indexer = Indexer()
     multi_vector_index, bm25, faiss_index = indexer.load_indices()
 
