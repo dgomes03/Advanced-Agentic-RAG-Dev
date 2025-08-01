@@ -298,7 +298,7 @@ class Retriever:
             "You are a query rephraser and expander for document search.\n"
             "Generate *ONLY* three alternative phrasings or expansions "
             "that capture different ways the same question could be asked for retrieving relevant context.\n"
-            "Provide *ONLY* three phrases.\n\n"
+            "Provide *ONLY* the three phrases. Dont include any other commentary.\n\n"
         )
         
         message = (
@@ -420,7 +420,7 @@ class Generator:
         return summary
 
     @staticmethod
-    def answer_query_with_llm(query, context, llm_model, llm_tokenizer, max_tokens=MAX_RESPONSE_TOKENS*2):
+    def answer_query_with_llm(query, context, expanded_queries_str, llm_model, llm_tokenizer, max_tokens=MAX_RESPONSE_TOKENS*2):
         # temperatura e top sampling
         sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
         logits_processors = make_logits_processors(repetition_penalty=1.2, repetition_context_size=128)
@@ -445,7 +445,7 @@ class Generator:
         
         # Build user message with context + query
         user_message = (
-            f"CONTEXT:\n{context}\n\nQUERY:\n{query}")
+            f"CONTEXT:\n{context}\n\nQUERY:\n{query}\n{expanded_queries_str}")
 
         #print(llm_tokenizer.chat_template)
 
@@ -462,8 +462,8 @@ class Generator:
         )
 
         # DEBUG: Verify prompt structure
-        #print("\nFORMATTED PROMPT:")
-        #print(prompt)
+        print("\nFORMATTED PROMPT:")
+        print(prompt)
 
         #cache = make_prompt_cache(llm_model) # k-v chache
 
@@ -593,7 +593,9 @@ if __name__ == "__main__":
                     rerank_top_n=5, # isto é o nº final de chunks q é entregue ao llm
                     use_summarization=False,
                 )
-                Generator.answer_query_with_llm(query, retrieved_context, llm_model, llm_tokenizer)
+                expanded_queries = retriever.expand_query(query)
+                expanded_queries_str = "\n".join(expanded_queries)
+                Generator.answer_query_with_llm(query, retrieved_context, expanded_queries_str, llm_model, llm_tokenizer)
         except KeyboardInterrupt:
             print("\nExiting program.")
     else:
