@@ -412,6 +412,87 @@ class Retriever:
 
 class Generator:
     @staticmethod
+    def tools_checker(query, llm_model, llm_tokenizer):
+        tools = [{
+                    "type": "function",
+                    "function": {
+                        "name": "search_documents",
+                        "description": "Search document index for relevant information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "Search query optimized for document retrieval"
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                }]
+
+        # temperatura e top sampling
+        sampler = make_sampler(temp=0.1, top_k=50, top_p=0.9)
+
+        system_prompt = (
+            "You are a decision-making assistant for information retrieval. Your ONLY task is to determine if a tool call is required to answer the user's query. "
+            "Follow these strict rules:\n\n"
+            "**TOOL CALL DECISION CRITERIA**\n"
+            "1. MUST call tool when:\n"
+            "   - Query requires factual information\n"
+            "   - Involves specific documents/data\n"
+            "   - Requests current/real-time information (add [CURRENT] prefix)\n"
+            "   - Asks for citations or sources\n\n"
+            "2. MUST NOT call tool when:\n"
+            "   - Greetings\n"
+            "   - Question is about your capabilities or instructions\n"
+            "   - Asks for opinions/general advice\n"
+            "   - Requires simple logical reasoning\n\n"
+            "**DECISION OUTPUT FORMAT**\n"
+            "- If tool needed: Answer CALL\n"
+            "- If not needed: Answer DIRECT\n\n"
+            "**EXAMPLES**\n"
+            "User: 'Hello! How are you?' → Response: DIRECT\n"
+            "User: 'What can you tell me about the TReB benchmark?' → Response: CALL\n"
+            "User: 'Explain quantum computing' → Response:  CALL\n"
+            "User: 'What forestry laws do you know about' → Response:  CALL"
+    )
+        
+        user_message = (
+            f"QUERY:\n{query}")
+
+        # Format conversation using tokenizer's chat template
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ]
+
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True, 
+            tokenize=False
+        )
+
+        response = generate(
+            llm_model, 
+            llm_tokenizer, 
+            prompt=prompt, 
+            max_tokens=MAX_RESPONSE_TOKENS, 
+            sampler=sampler,
+            verbose=False
+        )
+
+        # Binary decision processing
+        if "CALL" in response:
+            return {
+                "tool_call": True
+            }
+        else:
+            return {
+                "tool_call": False
+            }
+    
+    @staticmethod
     def summarize_passages(passages, llm_model, llm_tokenizer):
         context = "\n".join(passages)
         prompt = (
@@ -423,7 +504,7 @@ class Generator:
         return summary
 
     @staticmethod
-    def answer_query_with_llm(query, context, expanded_queries_str, llm_model, llm_tokenizer, max_tokens=MAX_RESPONSE_TOKENS*2):
+    def answer_query_with_llm(query, context, llm_model, llm_tokenizer, max_tokens=MAX_RESPONSE_TOKENS*2):
         # temperatura e top sampling
         sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
         logits_processors = make_logits_processors(repetition_penalty=1.2, repetition_context_size=128)
@@ -432,9 +513,9 @@ class Generator:
 
         print("Answer:")
         system_prompt = (
-            "You are a Retrieval-Augmented Generation AI assistant. Answer the following query based *only* on the provided context.\n"
-            "Do not add any information or make assumptions beyond the given context.\n"
-            "If the context does not contain the answer, clearly state that you cannot answer based on the given information.\n"
+            "You are a Retrieval-Augmented Generation AI assistant. Answer the following query based on the provided context if available, if not, just answer the user.\n"
+            "Do not add any information or make assumptions beyond the given context if available.\n"
+            "If the context is available, and it does not contain the answer to the user's query, clearly state that you cannot answer based on the given information.\n"
             "Provide your answer using concise bullet points for better clarity and understanding."
             
             #"You are a helpful, harmeless and honest AI assistant. Answer the following query based *only* on the provided sources.\n"
@@ -448,7 +529,7 @@ class Generator:
         
         # Build user message with context + query
         user_message = (
-            f"CONTEXT:\n{context}\n\nQUERY:\n{query}\n{expanded_queries_str}")
+            f"CONTEXT:\n{context}\n\nQUERY:\n{query}")
 
         #print(llm_tokenizer.chat_template)
 
@@ -465,10 +546,8 @@ class Generator:
         )
 
         # DEBUG: Verify prompt structure
-        print("\nFORMATTED PROMPT:")
-        print(prompt)
-
-        #cache = make_prompt_cache(llm_model) # k-v chache
+        #print("\nFORMATTED PROMPT:")
+        #print(prompt)
 
         response = generate(
             llm_model, 
@@ -477,50 +556,12 @@ class Generator:
             max_tokens=MAX_RESPONSE_TOKENS, 
             sampler=sampler, 
             logits_processors=logits_processors,
-            #prompt_cache=cache,
-            verbose=True)
-        return response
-
-    @staticmethod
-    def generate_answer_for_eval(query, context, llm_model, llm_tokenizer):
-        prompt = (
-            "You are a helpful AI assistant. Answer the following query based *only* on the provided context.\n"
-            "If the context does not contain the answer, state that you cannot answer based on the given information.\n"
-            "Provide your answer clearly.\n\n"
-            f"CONTEXT:\n{context}\n\nQUERY:\n{query}\n\nANSWER:\n"
+            verbose=True
         )
-        response = generate(llm_model, llm_tokenizer, prompt=prompt, max_tokens=200, verbose=False)
+
+        #cache = make_prompt_cache(llm_model) # k-v chache
+
         return response
-
-
-def evaluate_rag_system(indexer, retriever, llm_model, llm_tokenizer, reranker, num_examples=10):
-    print("\nLoading evaluation dataset (SQuAD, sampled)...")
-    dataset = load_dataset("squad", split=f"validation[:{num_examples}]")
-    rouge = evaluate.load("rouge")
-    bertscore = evaluate.load("bertscore")
-    all_preds = []
-    all_refs = []
-    print(f"Evaluating {num_examples} samples...")
-    for example in tqdm(dataset):
-        question = example["question"]
-        reference_answer = example["answers"]["text"][0] if example["answers"]["text"] else ""
-        retrieved_context = retriever.combined_retrieval(
-            question,
-            k=5,
-            weight_dense=0.6,
-            weight_sparse=0.4,
-        )
-        generated_answer = Generator.generate_answer_for_eval(question, retrieved_context, llm_model, llm_tokenizer)
-        all_preds.append(generated_answer.strip())
-        all_refs.append(reference_answer.strip())
-    rouge_results = rouge.compute(predictions=all_preds, references=all_refs, rouge_types=["rougeL"])
-    bertscore_results = bertscore.compute(predictions=all_preds, references=all_refs, lang="en")
-    print("\n=== Evaluation Results ===")
-    print(f"ROUGE-L F1: {rouge_results['rougeL']:.4f}")
-    print(f"BERTScore F1: {np.mean(bertscore_results['f1']):.4f}")
-    print(f"BERTScore Precision: {np.mean(bertscore_results['precision']):.4f}")
-    print(f"BERTScore Recall: {np.mean(bertscore_results['recall']):.4f}")
-
 
 # ==== Main Runtime ====
 if __name__ == "__main__":
@@ -578,16 +619,15 @@ if __name__ == "__main__":
     print(f"Index contains {len(multi_vector_index)} chunks.")
     print("\nReady to answer queries. (Type 'exit' to quit)")
 
-    # Interactive mode
-    interactive_mode = True
+    try:
+        while True:
+            query = input("\nEnter your query: ")
+            if query.lower() == "exit":
+                break
+            
+            tools = Generator.tools_checker(query, llm_model, llm_tokenizer)
 
-    if interactive_mode:
-        try:
-            while True:
-                query = input("\nEnter your query: ")
-                if query.lower() == "exit":
-                    break
-
+            if tools["tool_call"]:
                 retrieved_context = retriever.combined_retrieval(
                     query,
                     k=100,
@@ -596,10 +636,18 @@ if __name__ == "__main__":
                     rerank_top_n=5, # isto é o nº final de chunks q é entregue ao llm
                     use_summarization=False,
                 )
-                expanded_queries = retriever.expand_query(query)
-                expanded_queries_str = "\n".join(expanded_queries)
-                Generator.answer_query_with_llm(query, retrieved_context, expanded_queries_str, llm_model, llm_tokenizer)
-        except KeyboardInterrupt:
-            print("\nExiting program.")
-    else:
-        evaluate_rag_system(indexer, retriever, llm_model, llm_tokenizer, reranker, num_examples=10)
+
+                Generator.answer_query_with_llm(
+                    query,
+                    retrieved_context,
+                    llm_model, 
+                    llm_tokenizer)
+            else:
+                Generator.answer_query_with_llm(
+                    query, 
+                    None,
+                    llm_model, 
+                    llm_tokenizer)
+            
+    except KeyboardInterrupt:
+        print("\nExiting program.")
