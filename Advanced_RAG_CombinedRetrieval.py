@@ -1,10 +1,11 @@
 import os
 import io
+import json
 import pickle
 import numpy as np
 from collections import defaultdict
 import faiss
-import pymupdf as fitz  # PyMuPDF
+import pymupdf as fitz
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from mlx_lm import load, generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
@@ -17,8 +18,6 @@ import re
 import pytesseract
 from PIL import Image
 import concurrent.futures
-from datasets import load_dataset
-import evaluate
 from nltk.tokenize import word_tokenize
 
 num_threads = "1"
@@ -37,7 +36,7 @@ faiss.omp_set_num_threads(int(num_threads))
 
 # === Constants ===
 DOCUMENTS_DIR = "/Users/diogogomes/Documents/Uni/Tese Mestrado/RAG_database"
-MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/mistral-7b-instruct-v0.3-mixed-6-8-bit"
+MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-8b-instruct-mixed-6-8-bit"
 EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-mpnet-base-v2'
 MULTIVECTOR_INDEX_PATH = "Indexes/FAISS_index.pkl"
 BM25_DATA_PATH = "Indexes/BM25_index.pkl"
@@ -408,90 +407,21 @@ class Retriever:
             final_context = "\n---\n".join([chunk for chunk, meta in reranked])
             
         return final_context
-
+    
+    def search_documents_tool(self, query: str) -> str:
+        try:
+            return self.combined_retrieval(
+                query=query,
+                k=80,
+                weight_dense=0.6,
+                weight_sparse=0.4,
+                rerank_top_n=7, # final number chunks dado ao LLM
+                use_summarization=False
+            )
+        except Exception as e:
+            return f"Error: {str(e)}"
 
 class Generator:
-    @staticmethod
-    def tools_checker(query, llm_model, llm_tokenizer):
-        tools = [{
-                    "type": "function",
-                    "function": {
-                        "name": "search_documents",
-                        "description": "Search document index for relevant information",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "Search query optimized for document retrieval"
-                                }
-                            },
-                            "required": ["query"]
-                        }
-                    }
-                }]
-
-        # temperatura e top sampling
-        sampler = make_sampler(temp=0.1, top_k=50, top_p=0.9)
-
-        system_prompt = (
-            "You are a decision-making assistant for information retrieval. Your ONLY task is to determine if a tool call is required to answer the user's query. "
-            "Follow these strict rules:\n\n"
-            "**TOOL CALL DECISION CRITERIA**\n"
-            "1. MUST call tool when:\n"
-            "   - Query requires factual information\n"
-            "   - Involves specific documents/data\n"
-            "   - Requests current/real-time information (add [CURRENT] prefix)\n"
-            "   - Asks for citations or sources\n\n"
-            "2. MUST NOT call tool when:\n"
-            "   - Greetings\n"
-            "   - Question is about your capabilities or instructions\n"
-            "   - Asks for opinions/general advice\n"
-            "   - Requires simple logical reasoning\n\n"
-            "**DECISION OUTPUT FORMAT**\n"
-            "- If tool needed: Answer CALL\n"
-            "- If not needed: Answer DIRECT\n\n"
-            "**EXAMPLES**\n"
-            "User: 'Hello! How are you?' → Response: DIRECT\n"
-            "User: 'What can you tell me about the TReB benchmark?' → Response: CALL\n"
-            "User: 'Explain quantum computing' → Response:  CALL\n"
-            "User: 'What forestry laws do you know about' → Response:  CALL"
-    )
-        
-        user_message = (
-            f"QUERY:\n{query}")
-
-        # Format conversation using tokenizer's chat template
-        conversation = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message}
-        ]
-
-        prompt = llm_tokenizer.apply_chat_template(
-            conversation,
-            add_generation_prompt=True, 
-            tokenize=False
-        )
-
-        response = generate(
-            llm_model, 
-            llm_tokenizer, 
-            prompt=prompt, 
-            max_tokens=MAX_RESPONSE_TOKENS, 
-            sampler=sampler,
-            verbose=False
-        )
-
-        # Binary decision processing
-        if "CALL" in response:
-            return {
-                "tool_call": True
-            }
-        else:
-            return {
-                "tool_call": False
-            }
-    
     @staticmethod
     def summarize_passages(passages, llm_model, llm_tokenizer):
         context = "\n".join(passages)
@@ -503,64 +433,185 @@ class Generator:
         summary = generate(llm_model, llm_tokenizer, prompt=prompt, max_tokens=700, verbose=False)
         return summary
 
-    @staticmethod
-    def answer_query_with_llm(query, context, llm_model, llm_tokenizer, max_tokens=MAX_RESPONSE_TOKENS*2):
+    def answer_query_with_llm(query, context, llm_model, llm_tokenizer, search_documents_tool):
+        tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_documents",
+                        "description": "Search for documents relevant to the user's query.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query string."
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                }
+            ]
+        
+        conversation = [
+        {"role": "system", "content": "You are a helpful assistant with document search capabilities. If you use document search, answer based *only* on the provided documents."},
+        {"role": "user", "content": query}
+    ]
+
         # temperatura e top sampling
         sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
-        logits_processors = make_logits_processors(repetition_penalty=1.2, repetition_context_size=128)
+        logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
 
-        #print(f"\nQuery: {query}\n")
-
-        print("Answer:")
-        system_prompt = (
-            "You are a Retrieval-Augmented Generation AI assistant. Answer the following query based on the provided context if available, if not, just answer the user.\n"
-            "Do not add any information or make assumptions beyond the given context if available.\n"
-            "If the context is available, and it does not contain the answer to the user's query, clearly state that you cannot answer based on the given information.\n"
-            "Provide your answer using concise bullet points for better clarity and understanding."
-            
-            #"You are a helpful, harmeless and honest AI assistant. Answer the following query based *only* on the provided sources.\n"
-            #"The sources are in English and Portuguese.\n"
-            #"If the context does not contain the answer, state that you cannot answer based on the given information.\n"
-            #"Provide your answer using bullet points for better understanding.\n"
-            #"Cite the sources (title of document/file) used for the given response in a new paragraph at the bottom of the response with the title 'REFERENCES:'.\n"
-            #"IMPORTANT: If the user query is in Portuguese, respond in Portuguese!!!\n\n"
-            #f"CONTEXT:\n{context}\n\nQUERY:\n{query}\n\nANSWER:\n"
-        )
-        
-        # Build user message with context + query
-        user_message = (
-            f"CONTEXT:\n{context}\n\nQUERY:\n{query}")
-
-        #print(llm_tokenizer.chat_template)
-
-        # Format conversation using tokenizer's chat template
-        conversation = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message}
-        ]
-
+        # First call: include tools definition
         prompt = llm_tokenizer.apply_chat_template(
             conversation,
-            add_generation_prompt=True, 
+            add_generation_prompt=True,
+            tools=tools,
             tokenize=False
         )
-
-        # DEBUG: Verify prompt structure
-        #print("\nFORMATTED PROMPT:")
-        #print(prompt)
-
+        
+        prompt_cache = make_prompt_cache(llm_model)
+        
+        # Generate first response
         response = generate(
-            llm_model, 
-            llm_tokenizer, 
-            prompt=prompt, 
-            max_tokens=MAX_RESPONSE_TOKENS, 
-            sampler=sampler, 
+            model=llm_model,
+            tokenizer=llm_tokenizer,
+            prompt=prompt,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            sampler=sampler,
             logits_processors=logits_processors,
+            prompt_cache=prompt_cache,
             verbose=True
         )
+        
+        # Check if response contains a tool call request
+        response_text = response.strip()
+        
+        # In Ministral models with custom templates, tool calls are indicated with [TOOL_CALLS] tags
+        if "[TOOL_CALLS][" in response_text:
+            print("\nModel requested to use a tool. Processing tool call...")
+            
+            try:
+                # Extract the JSON content between [TOOL_CALLS][ and ]
+                start_tag = "[TOOL_CALLS]["
+                end_tag = "]"
+                
+                start_idx = response_text.find(start_tag)
+                if start_idx == -1:
+                    raise ValueError("Could not find start tag")
+                    
+                start_idx += len(start_tag)
+                end_idx = response_text.find(end_tag, start_idx)
+                
+                if end_idx == -1:
+                    raise ValueError("Could not find end tag")
+                    
+                tool_call_str = response_text[start_idx:end_idx]
+                
+                print(f"Raw tool call string: {tool_call_str}")
+                
+                # Parse the tool call - handle both array and single object formats
+                try:
+                    # First try parsing as a JSON array
+                    tool_calls = json.loads(tool_call_str)
+                    if not isinstance(tool_calls, list):
+                        tool_calls = [tool_calls]  # Wrap single object in a list
+                except json.JSONDecodeError:
+                    # If that fails, try to fix common formatting issues
+                    # Sometimes the model outputs a single object without array brackets
+                    try:
+                        # Try parsing as a single object and wrap in a list
+                        tool_call = json.loads(tool_call_str)
+                        tool_calls = [tool_call]
+                    except json.JSONDecodeError as e:
+                        print(f"JSON parsing error: {e}")
+                        print(f"Problematic string: {tool_call_str}")
+                        raise
+                
+                print(f"Successfully parsed tool calls: {tool_calls}")
+                
+                # Add tool call to conversation
+                formatted_tool_calls = []
+                for idx, tool_call in enumerate(tool_calls):
+                    # Ensure proper format with ID
+                    call_id = f"call_{idx+1:03d}"  # Must be 9 characters as per your template
+                    if len(call_id) < 9:
+                        call_id = call_id.ljust(9, '0')
+                        
+                    if "function" in tool_call:
+                        formatted_tool_calls.append({
+                            "id": call_id,
+                            "function": tool_call["function"],
+                            "type": "function"
+                        })
+                    else:
+                        formatted_tool_calls.append({
+                            "id": call_id,
+                            "function": {
+                                "name": tool_call["name"],
+                                "arguments": tool_call["arguments"]
+                            },
+                            "type": "function"
+                        })
+                
+                conversation.append({
+                    "role": "assistant",
+                    "tool_calls": formatted_tool_calls
+                })
+                
+                # Execute each tool call and add results
+                for tool_call in formatted_tool_calls:
+                    tool_name = tool_call["function"]["name"]
+                    tool_args = tool_call["function"]["arguments"]
+                    tool_id = tool_call["id"]
+                    
+                    print(f"Executing tool: {tool_name} with args: {tool_args}")
+                    
+                    if tool_name == "search_documents":
+                        tool_result = search_documents_tool(tool_args["query"])
+                    else:
+                        tool_result = f"Error: Unknown tool: {tool_name}"
+                    
+                    conversation.append({
+                        "role": "tool",
+                        "content": tool_result,
+                        "tool_call_id": tool_id
+                    })
 
-        #cache = make_prompt_cache(llm_model) # k-v chache
+                # Generate final response with tool results
+                print("\nGenerating final response with tool results...")
+                prompt = llm_tokenizer.apply_chat_template(
+                    conversation,
+                    add_generation_prompt=True,
+                    tools=tools,
+                    tokenize=False
+                )
+                
+                prompt_cache = make_prompt_cache(llm_model)
+                final_response = generate(
+                    model=llm_model,
+                    tokenizer=llm_tokenizer,
+                    prompt=prompt,
+                    max_tokens=MAX_RESPONSE_TOKENS,
+                    sampler=sampler,
+                    logits_processors=logits_processors,
+                    prompt_cache=prompt_cache,
+                    verbose=True
+                )
 
+                print("\nFORMATTED PROMPT:")
+                print(prompt)
+
+                return final_response
+                
+            except Exception as e:
+                print(f"Error processing tool calls: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return response
+
+    # If no tool call was detected, return the response directly
         return response
 
 # ==== Main Runtime ====
@@ -617,6 +668,10 @@ if __name__ == "__main__":
     )
 
     print(f"Index contains {len(multi_vector_index)} chunks.")
+    # Force cleanup
+    import gc
+    gc.collect()
+
     print("\nReady to answer queries. (Type 'exit' to quit)")
 
     try:
@@ -624,30 +679,16 @@ if __name__ == "__main__":
             query = input("\nEnter your query: ")
             if query.lower() == "exit":
                 break
-            
-            tools = Generator.tools_checker(query, llm_model, llm_tokenizer)
 
-            if tools["tool_call"]:
-                retrieved_context = retriever.combined_retrieval(
-                    query,
-                    k=100,
-                    weight_dense=0.6,
-                    weight_sparse=0.4,
-                    rerank_top_n=5, # isto é o nº final de chunks q é entregue ao llm
-                    use_summarization=False,
+            context = "[NO DOCUMENTS]"
+
+            Generator.answer_query_with_llm(
+                query,
+                context,
+                llm_model, 
+                llm_tokenizer,
+                search_documents_tool=retriever.search_documents_tool 
                 )
-
-                Generator.answer_query_with_llm(
-                    query,
-                    retrieved_context,
-                    llm_model, 
-                    llm_tokenizer)
-            else:
-                Generator.answer_query_with_llm(
-                    query, 
-                    None,
-                    llm_model, 
-                    llm_tokenizer)
             
     except KeyboardInterrupt:
         print("\nExiting program.")
