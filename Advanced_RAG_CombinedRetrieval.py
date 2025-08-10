@@ -250,7 +250,6 @@ class Indexer:
         faiss.omp_set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "1")))
         return index
 
-
 class Retriever:
     def __init__(self, multi_vector_index, embedding_model, faiss_index,
                  bm25,
@@ -433,7 +432,7 @@ class Generator:
         summary = generate(llm_model, llm_tokenizer, prompt=prompt, max_tokens=700, verbose=False)
         return summary
 
-    def answer_query_with_llm(query, context, llm_model, llm_tokenizer, search_documents_tool):
+    def answer_query_with_llm(query, llm_model, llm_tokenizer, search_documents_tool, history):
         tools = [
                 {
                     "type": "function",
@@ -456,7 +455,7 @@ class Generator:
         
         conversation = [
         {"role": "system", "content": "You are a helpful assistant with document search capabilities. If you use document search, answer based *only* on the provided documents."},
-        {"role": "user", "content": query}
+        {"role": "user", "content":f"CHAT HISTORY:\n{history}\n\nQUERY:\n{query}"}
     ]
 
         # temperatura e top sampling
@@ -487,6 +486,9 @@ class Generator:
         
         # Check if response contains a tool call request
         response_text = response.strip()
+
+        print("\nFORMATTED PROMPT:")
+        print(prompt)
         
         # In Ministral models with custom templates, tool calls are indicated with [TOOL_CALLS] tags
         if "[TOOL_CALLS][" in response_text:
@@ -509,8 +511,6 @@ class Generator:
                     
                 tool_call_str = response_text[start_idx:end_idx]
                 
-                print(f"Raw tool call string: {tool_call_str}")
-                
                 # Parse the tool call - handle both array and single object formats
                 try:
                     # First try parsing as a JSON array
@@ -529,7 +529,7 @@ class Generator:
                         print(f"Problematic string: {tool_call_str}")
                         raise
                 
-                print(f"Successfully parsed tool calls: {tool_calls}")
+                print(f"Successfully parsed tool calls.")
                 
                 # Add tool call to conversation
                 formatted_tool_calls = []
@@ -673,7 +673,7 @@ if __name__ == "__main__":
     gc.collect()
 
     print("\nReady to answer queries. (Type 'exit' to quit)")
-
+    history = []
     try:
         while True:
             query = input("\nEnter your query: ")
@@ -682,13 +682,16 @@ if __name__ == "__main__":
 
             context = "[NO DOCUMENTS]"
 
-            Generator.answer_query_with_llm(
+            response = Generator.answer_query_with_llm(
                 query,
-                context,
                 llm_model, 
                 llm_tokenizer,
-                search_documents_tool=retriever.search_documents_tool 
+                retriever.search_documents_tool,
+                history
                 )
+            
+            history.append({"query": query, "response": response})
+            history = history[-3:] # mantem apenas ultimas 3 msgs no chat history
             
     except KeyboardInterrupt:
         print("\nExiting program.")
