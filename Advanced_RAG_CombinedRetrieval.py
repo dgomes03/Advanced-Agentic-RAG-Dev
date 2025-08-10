@@ -433,6 +433,47 @@ class Generator:
         return summary
 
     def answer_query_with_llm(query, llm_model, llm_tokenizer, search_documents_tool, history):
+        def search_wikipedia(query: str) -> str:
+            """Fetch top Wikipedia results using Wikipedia API"""
+            try:
+                import urllib.parse
+                import urllib.request
+                import json
+                
+                # Prepare API request
+                encoded_query = urllib.parse.quote(query)
+                url = (
+                    f"https://en.wikipedia.org/w/api.php?action=query&list=search"
+                    f"&srsearch={encoded_query}&format=json&srlimit=3"
+                )
+                
+                # Add user-agent header (required by Wikipedia)
+                headers = {'User-Agent': 'YourApp/1.0 (contact@example.com)'}
+                req = urllib.request.Request(url, headers=headers)
+                
+                # Execute request with timeout
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                
+                # Process results
+                if not data.get('query', {}).get('search'):
+                    return "No relevant Wikipedia articles found."
+                    
+                results = []
+                for i, item in enumerate(data['query']['search'], 1):
+                    # Clean HTML snippets from Wikipedia
+                    snippet = (
+                        item['snippet']
+                        .replace('<span class="searchmatch">', '**')
+                        .replace('</span>', '**')
+                    )
+                    results.append(f"{i}. **{item['title']}**: {snippet}")
+                
+                return "Wikipedia Results:\n" + "\n".join(results)
+                
+            except Exception as e:
+                return f"Wikipedia Error: {str(e)}. Try rephrasing your query."
+        
         tools = [
                 {
                     "type": "function",
@@ -450,13 +491,37 @@ class Generator:
                             "required": ["query"]
                         }
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_wikipedia",
+                        "description": "Search Wikipedia for factual information and general knowledge.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The search query string."}
+                            },
+                            "required": ["query"]
+                        }
+                    }
                 }
             ]
         
+            # FIX 1: Properly format conversation history as a conversation, not as query-response pairs
         conversation = [
-        {"role": "system", "content": "You are a helpful assistant with document search capabilities. If you use document search, answer based *only* on the provided documents."},
-        {"role": "user", "content":f"CHAT HISTORY:\n{history}\n\nQUERY:\n{query}"}
-    ]
+            {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia capabilities. If you use tools, answer based *only* on the provided results. IMPORTANT: After receiving tool results, provide a final answer - DO NOT make additional tool calls."}
+        ]
+        
+        # FIX 2: Parse actual conversation history properly
+        if history:
+            # Assuming history is a list of dicts with 'query' and 'response' keys
+            for item in history:
+                conversation.append({"role": "user", "content": item["query"]})
+                conversation.append({"role": "assistant", "content": item["response"]})
+        
+        # Add current query
+        conversation.append({"role": "user", "content": query})
 
         # temperatura e top sampling
         sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
@@ -487,8 +552,8 @@ class Generator:
         # Check if response contains a tool call request
         response_text = response.strip()
 
-        print("\nFORMATTED PROMPT:")
-        print(prompt)
+        #print("\nFORMATTED PROMPT:")
+        #print(prompt)
         
         # In Ministral models with custom templates, tool calls are indicated with [TOOL_CALLS] tags
         if "[TOOL_CALLS][" in response_text:
@@ -555,8 +620,10 @@ class Generator:
                             "type": "function"
                         })
                 
+                # FIX 3: Properly add tool calls to conversation
                 conversation.append({
                     "role": "assistant",
+                    "content": None,  # Important: set content to None when using tool calls
                     "tool_calls": formatted_tool_calls
                 })
                 
@@ -568,8 +635,12 @@ class Generator:
                     
                     print(f"Executing tool: {tool_name} with args: {tool_args}")
                     
+                    # Handle BOTH tools
                     if tool_name == "search_documents":
                         tool_result = search_documents_tool(tool_args["query"])
+                    # NEW: Handle Wikipedia tool
+                    elif tool_name == "search_wikipedia":
+                        tool_result = search_wikipedia(tool_args["query"])
                     else:
                         tool_result = f"Error: Unknown tool: {tool_name}"
                     
@@ -600,8 +671,8 @@ class Generator:
                     verbose=True
                 )
 
-                print("\nFORMATTED PROMPT:")
-                print(prompt)
+                #print("\nFORMATTED PROMPT:")
+                #print(prompt)
 
                 return final_response
                 
