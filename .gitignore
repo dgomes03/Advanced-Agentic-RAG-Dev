@@ -3,5 +3,9 @@
 
 # But not these files...
 !.gitignore
+!rag_server.py
+!eval.py
+!eval.json
+!LangChain_Advanced_RAG_CombinedRetrieval.py
 !Advanced_RAG_CombinedRetrieval.py
 !LRM_Advanced_RAG_CombinedRetrieval.py

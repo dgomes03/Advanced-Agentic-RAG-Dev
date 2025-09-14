@@ -1,31 +1,6 @@
-% ============================================================
-%
-% LaTeX template of the CHAIR OF MACHINE LEARNING AND DATA ENGINEERING and CHAIR OF DIGITAL INNOVATION AND THE PUBLIC SECTOR
-% of the University of Münster
-%
-%
-% Terms of use:
-% Under no condition, do NOT change this file!
-% If additional packages are required, add them in the "main.tex"-file in the preamble
-% If problems occur, contact the author
-
-% ============================================================
 
 \def\fileversion{2.5}
-% 1.0 Initial release: options "language" & "thesis"
-% 1.1 Update: option "supervisor" -> if supervisor = professor, the supervisor is not explicitly displayed
-% 1.2 Update: option "chair" -> the template is expanded so that the chair of Machine Learning and Data Engineering can also use this template
-% 1.3 Update: option "chair" -> both chairs of data science can be selected
-% 1.4 Update: option "supervisor" -> change options to "postdoc" and "supervisor" and adjust the labels
-% 1.4 Update: Enlarge spacing between the number of a subsection and its title
-% 1.5 Update: Change natbib to biblatex for citation and bibliography. Add alphanumeric citation style for machine learning chair. Add multiauthor option for seminar and project seminars.
-% -----
-% 2.0 Update: finalize changes for the merged template of both data science chairs.
-% 2.1 Update: adjustment of headers and page geometry of appendix
-% 2.2 Update: add option for the chair of Digital Innovation and the Public Sector
-% 2.3 Update: (re-)adding student name back cover page, renaming files to avoid chair-specific naming
-% 2.4 Update: Remove leftover "westfälisch", minor fixes
-% 2.5 Update: Add Confidentiality Statement, Renaming Chapter to Section in Englisch for DIPS, Update pagestyle for ToC
+
 \def\filedate{2025/06/24}
 
 % ============================================================
@@ -568,7 +543,7 @@
   \begin{titlepage}
     \centering
     \vspace{0.3cm}
-    {\scshape\Large University of M\"unster}\par
+    {\scshape\Large University of Lisbon}\par
     \vspace{-3mm}
     {\scshape\large Department of Information Systems}\par
     \vspace{1cm}
@@ -678,7 +653,7 @@
   \begin{titlepage}
     \centering
     \vspace{0.5cm}
-    {\scshape\Large Universit\"at M\"unster}\par
+    {\scshape\Large University of Lisbon}\par
     {\scshape\large Institut für Wirtschaftsinformatik}\par
     \vspace{1cm}
     {\textcolor{gray}{\rule{0.9\textwidth}{0.5mm}}}

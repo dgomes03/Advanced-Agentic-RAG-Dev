@@ -21,6 +21,11 @@ import pytesseract
 from PIL import Image
 import concurrent.futures
 from nltk.tokenize import word_tokenize
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import threading
+import time
+from flask import Response, stream_with_context
 
 num_threads = "1"
 
@@ -45,11 +50,16 @@ BM25_DATA_PATH = "Indexes/BM25_index.pkl"
 RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
 MAX_RESPONSE_TOKENS = 1000
 
+# Flask app
+app = Flask(__name__)
+CORS(app)  # Enable Cross-Origin Resource Sharing
+
+# Global RAG system
+rag_system = None
 
 def save_pickle(obj, filename):
     with open(filename, "wb") as f:
         pickle.dump(obj, f)
-
 
 def load_pickle(filename):
     if os.path.exists(filename):
@@ -262,6 +272,7 @@ class Retriever:
         self.llm_model = llm_model
         self.llm_tokenizer = llm_tokenizer
         self.reranker = reranker
+        self.last_retrieved_metadata = []
 
     @staticmethod
     def normalize_scores(scores):
@@ -309,7 +320,7 @@ class Retriever:
             {"role": "user", "content": message}
         ]
 
-        prompt = llm_tokenizer.apply_chat_template(
+        prompt = self.llm_tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True, 
             tokenize=False
@@ -433,6 +444,7 @@ class Generator:
         summary = generate(llm_model, llm_tokenizer, prompt=prompt, max_tokens=700, verbose=False)
         return summary
 
+    @staticmethod
     def answer_query_with_llm(query, llm_model, llm_tokenizer, search_documents_tool, history):
         def search_wikipedia(query: str) -> str:
             """Fetch top Wikipedia results using Wikipedia API"""
@@ -659,8 +671,47 @@ class Generator:
     # If no tool call was detected, return the response directly
         return response
 
-# ==== Main Runtime ====
-if __name__ == "__main__":
+# Flask routes
+@app.route('/query', methods=['POST'])
+def handle_query():
+    data = request.get_json()
+    query = data.get('query', '')
+    
+    if not query:
+        return jsonify({'error': 'No query provided'}), 400
+    
+    def generate():
+        try:
+            # Create a custom generator function for the LLM response
+            response = Generator.answer_query_with_llm_streaming(
+                query,
+                rag_system.llm_model, 
+                rag_system.llm_tokenizer,
+                rag_system.search_documents_tool,
+                []
+            )
+            
+            # Stream the response token by token
+            for token in response:
+                yield f"data: {json.dumps({'token': token})}\n\n"
+                time.sleep(0.01)  # Small delay to make streaming visible
+                
+            # Signal the end of the stream
+            yield "data: [DONE]\n\n"
+            
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            yield f"data: {json.dumps({'error': error_msg})}\n\n"
+            yield "data: [DONE]\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+@app.route('/status', methods=['GET'])
+def status():
+    return jsonify({'status': 'ready'})
+
+def initialize_rag_system():
+    global rag_system
     print("Attempting to load saved FAISS index and BM25 index...")
     indexer = Indexer()
     multi_vector_index, bm25, faiss_index = indexer.load_indices()
@@ -702,7 +753,7 @@ if __name__ == "__main__":
         indexer.save_indices(multi_vector_index, bm25, faiss_index)
 
     print("\nCreating Retriever...")
-    retriever = Retriever(
+    rag_system = Retriever(
         multi_vector_index,
         embedding_model,
         faiss_index,  #FAISS index
@@ -716,27 +767,12 @@ if __name__ == "__main__":
     # Force cleanup
     import gc
     gc.collect()
+    print("RAG system initialized successfully!")
 
-    print("\nReady to answer queries. (Type 'exit' to quit)")
-    history = []
-    try:
-        while True:
-            query = input("\nEnter your query: ")
-            if query.lower() == "exit":
-                break
-
-            context = "[NO DOCUMENTS]"
-
-            response = Generator.answer_query_with_llm(
-                query,
-                llm_model, 
-                llm_tokenizer,
-                retriever.search_documents_tool,
-                history
-                )
-            
-            history.append({"query": query, "response": response})
-            history = history[-3:] # mantem apenas ultimas 3 msgs no chat history
-            
-    except KeyboardInterrupt:
-        print("\nExiting program.")
+if __name__ == '__main__':
+    # Initialize the RAG system
+    initialize_rag_system()
+    
+    # Start the Flask server
+    print("Starting RAG server on http://localhost:5000")
+    app.run(host='localhost', port=5000, debug=False, use_reloader=False)
