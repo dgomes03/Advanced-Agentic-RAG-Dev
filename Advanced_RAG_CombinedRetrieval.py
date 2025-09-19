@@ -22,6 +22,21 @@ from PIL import Image
 import concurrent.futures
 from nltk.tokenize import word_tokenize
 
+# === Server Configuration ===
+ENABLE_SERVER = False
+SERVER_HOST = 'localhost'
+SERVER_PORT = 5050
+
+if ENABLE_SERVER:
+    from flask import Flask, request, jsonify
+    from flask_cors import CORS
+    import threading
+    import time
+    from flask import Response, stream_with_context
+
+# Global RAG system for server mode
+rag_system = None
+
 num_threads = "1"
 
 os.environ["OMP_NUM_THREADS"] = num_threads
@@ -44,6 +59,7 @@ MULTIVECTOR_INDEX_PATH = "Indexes/FAISS_index.pkl"
 BM25_DATA_PATH = "Indexes/BM25_index.pkl"
 RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
 MAX_RESPONSE_TOKENS = 1000
+EVAL = False
 
 
 def save_pickle(obj, filename):
@@ -57,6 +73,46 @@ def load_pickle(filename):
             return pickle.load(f)
     else:
         return None
+    
+# Server routes (only if server is enabled)
+if ENABLE_SERVER:
+    app = Flask(__name__)
+    CORS(app)  # Enable Cross-Origin Resource Sharing
+
+    @app.route('/query', methods=['POST'])
+    def handle_query():
+        data = request.get_json()
+        query = data.get('query', '')
+        
+        if not query:
+            return jsonify({'error': 'No query provided'}), 400
+        
+        def generate():
+            try:
+                # Stream the response token by token
+                for text_chunk in Generator.answer_query_with_llm(
+                    query,
+                    rag_system.llm_model, 
+                    rag_system.llm_tokenizer,
+                    rag_system.search_documents_tool,
+                    []
+                ):
+                    yield f"data: {json.dumps({'text': text_chunk})}\n\n"
+                    time.sleep(0.01)  # Small delay to make streaming visible
+                    
+                # Signal the end of the stream
+                yield "data: [DONE]\n\n"
+                
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                yield f"data: {json.dumps({'error': error_msg})}\n\n"
+                yield "data: [DONE]\n\n"
+        
+        return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+    @app.route('/status', methods=['GET'])
+    def status():
+        return jsonify({'status': 'ready'})
 
 class Indexer:
     def __init__(self, documents_dir=DOCUMENTS_DIR, embedding_model_name=EMBEDDING_MODEL_NAME,
@@ -415,7 +471,7 @@ class Retriever:
                 k=80,
                 weight_dense=0.6,
                 weight_sparse=0.4,
-                rerank_top_n=5, # final number chunks dado ao LLM
+                rerank_top_n=6, # final number chunks dado ao LLM
                 use_summarization=False
             )
         except Exception as e:
@@ -511,9 +567,9 @@ class Generator:
         
         # FIX 1: Properly format conversation history as a conversation, not as query-response pairs
         conversation = [
-            {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia capabilities. If you use tools, answer based *only* on the provided results. IMPORTANT: After receiving tool results, provide a final answer - DO NOT make additional tool calls."}
+            {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia capabilities. If you use tools, answer based *only* on the provided results. After receiving tool results, provide a final answer, DO NOT make additional tool calls."}
         ]
-        
+
         # FIX 2: Parse actual conversation history properly
         if history:
             # Assuming history is a list of dicts with 'query' and 'response' keys
@@ -641,23 +697,60 @@ class Generator:
                     sampler=sampler,
                     logits_processors=logits_processors,
                     prompt_cache=prompt_cache,
-                    
                     verbose=True
                 )
 
                 print("\nFORMATTED PROMPT:")
                 print(prompt)
 
-                return final_response
+                return final_response, prompt
                 
             except Exception as e:
                 print(f"Error processing tool calls: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 return response
-
-    # If no tool call was detected, return the response directly
         return response
+            
+    def eval(query, llm_model, llm_tokenizer, rag_response):
+        system_prompt = f"""
+            You are a RAG evaluator judge. Please evaluate the following response based on these criteria with a 0-10 scale:
+            1. Context Relevance: How well retrieved documents align with the user's query and are able to address it.
+                Example: Question: when was the biggest earthquake in Lisbon? Answer: The biggest earthquake in Lisbon was in 1755. Retrieved chunks: The biggest earthquake in Lisbon was in 1755, which killed more than 30000 people. Score: 10; Question: when was the biggest earthquake in Lisbon? Answer: The biggest earthquake in Lisbon was in 1755. Retrieved chunks: The white house is where the president lives. Score: 0; Question: when was the biggest earthquake in Lisbon? Answer: The biggest earthquake in Lisbon was in 1755. Retrieved chunks: The earthquake. Lisbon. Earthquake in Lisbon. The earthquake in Lisbon. The earthquake in Lisbon. The biggest earthquake in Lisbon Score: 3;
+            2. Groundedness: How accurately the response is based on the retrieved context.
+            3. Answer Relevance: How well the response addresses the original query.
+            4. Faithfulness: Is the output contradicting the retrieved facts?
+            5. Contextual Recall: Did we retrieve ALL the info needed?
+            6. Contextual Relevancy: What % of retrieved chunks actually matter?
+            Be precise and objective on your scores! Be very critic.
+        """
+
+        user_prompt = f"""
+            \n\nUser Query: {query}\n\n
+            Response and context: {rag_response}
+        """
+    
+        eval_conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+            ]
+        
+        sampler = make_sampler(temp=0.2, top_k=30, top_p=0.6)
+
+        prompt = llm_tokenizer.apply_chat_template(
+            eval_conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+
+        eval_response = generate(
+            model=llm_model,
+            tokenizer=llm_tokenizer,
+            prompt=prompt,
+            sampler=sampler,
+            verbose=False
+        )
+        print("Evaluation Results:\n", eval_response)
 
 # ==== Main Runtime ====
 if __name__ == "__main__":
@@ -717,26 +810,54 @@ if __name__ == "__main__":
     import gc
     gc.collect()
 
-    print("\nReady to answer queries. (Type 'exit' to quit)")
-    history = []
-    try:
-        while True:
-            query = input("\nEnter your query: ")
-            if query.lower() == "exit":
-                break
 
-            context = "[NO DOCUMENTS]"
+    if ENABLE_SERVER:
+        rag_system = retriever
+        print(f"Starting RAG server on http://{SERVER_HOST}:{SERVER_PORT}")
+        app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, use_reloader=False)
+    else:
+        # Run in interactive console mode
+        print("\nReady to answer queries. (Type 'exit' to quit)")
+        history = []
+        try:
+            while True:
+                query = input("\nEnter your query: ")
+                if query.lower() == "exit":
+                    break
 
-            response = Generator.answer_query_with_llm(
-                query,
-                llm_model, 
-                llm_tokenizer,
-                retriever.search_documents_tool,
-                history
-                )
-            
-            history.append({"query": query, "response": response})
-            history = history[-3:] # mantem apenas ultimas 3 msgs no chat history
-            
-    except KeyboardInterrupt:
-        print("\nExiting program.")
+                #context = "[NO DOCUMENTS]"
+
+                rag_response = Generator.answer_query_with_llm(
+                    query,
+                    llm_model, 
+                    llm_tokenizer,
+                    retriever.search_documents_tool,
+                    history
+                    )
+                
+                #print("\n\nDEBUG:")
+                #print(rag_response)
+
+                # Extract just the response text, not the tuple
+                if isinstance(rag_response, tuple):
+                    response_text = rag_response[0]  # First element is the response text
+                else:
+                    response_text = rag_response
+
+                # Store only the text in history
+                history.append({"query": query, "response": response_text})
+                history = history[-6:] # mantem apenas ultimas 3 msgs no chat history
+                
+                ##################### EVAL BREAKS AFTER 1 RESPONSE!!!! #########################
+
+                if EVAL:
+                    print("==========")
+                    eval = Generator.eval(
+                        query,
+                        llm_model, 
+                        llm_tokenizer,
+                        rag_response
+                    )
+
+        except KeyboardInterrupt:
+            print("\nExiting program.")
