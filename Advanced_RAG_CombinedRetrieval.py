@@ -22,20 +22,6 @@ from PIL import Image
 import concurrent.futures
 from nltk.tokenize import word_tokenize
 
-# === Server Configuration ===
-ENABLE_SERVER = False
-SERVER_HOST = 'localhost'
-SERVER_PORT = 5050
-
-if ENABLE_SERVER:
-    from flask import Flask, request, jsonify
-    from flask_cors import CORS
-    import threading
-    import time
-    from flask import Response, stream_with_context
-
-# Global RAG system for server mode
-rag_system = None
 
 num_threads = "1"
 
@@ -59,8 +45,23 @@ MULTIVECTOR_INDEX_PATH = "Indexes/FAISS_index.pkl"
 BM25_DATA_PATH = "Indexes/BM25_index.pkl"
 RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
 MAX_RESPONSE_TOKENS = 1000
+
 EVAL = False
 
+# === Server Configuration ===
+ENABLE_SERVER = False
+SERVER_HOST = 'localhost'
+SERVER_PORT = 5050
+
+if ENABLE_SERVER:
+    from flask import Flask, request, jsonify
+    from flask_cors import CORS
+    import threading
+    import time
+    from flask import Response, stream_with_context
+
+# Global RAG system for server mode
+rag_system = None
 
 def save_pickle(obj, filename):
     with open(filename, "wb") as f:
@@ -479,7 +480,7 @@ class Retriever:
 
 class Generator:
     @staticmethod
-    def summarize_passages(passages, llm_model, llm_tokenizer):
+    def summarize_passages(passages, llm_model, llm_tokenizer): # LLM summariza retrieved info/context.
         context = "\n".join(passages)
         prompt = (
             "Summarize the following retrieved passages.\n"
@@ -491,45 +492,61 @@ class Generator:
 
     def answer_query_with_llm(query, llm_model, llm_tokenizer, search_documents_tool, history):
         def search_wikipedia(query: str) -> str:
-            """Fetch top Wikipedia results using Wikipedia API"""
+            """Fetch Wikipedia results with structured data for RAG"""
             try:
                 import urllib.parse
                 import urllib.request
                 import json
                 
-                # Prepare API request
+                # Search for pages
                 encoded_query = urllib.parse.quote(query)
-                url = (
+                search_url = (
                     f"https://en.wikipedia.org/w/api.php?action=query&list=search"
-                    f"&srsearch={encoded_query}&format=json&srlimit=3"
+                    f"&srsearch={encoded_query}&format=json&srlimit=2&srnamespace=0" # muda o limit para o que quiseres. o ideal é entre 2/3. >2 podes ter >15000 tok 
                 )
                 
-                # Add user-agent header (required by Wikipedia)
                 headers = {'User-Agent': 'YourApp/1.0 (contact@example.com)'}
-                req = urllib.request.Request(url, headers=headers)
+                search_req = urllib.request.Request(search_url, headers=headers)
                 
-                # Execute request with timeout
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    data = json.loads(response.read().decode('utf-8'))
+                with urllib.request.urlopen(search_req, timeout=10) as response:
+                    search_data = json.loads(response.read().decode('utf-8'))
                 
-                # Process results
-                if not data.get('query', {}).get('search'):
-                    return "No relevant Wikipedia articles found."
-                    
-                results = []
-                for i, item in enumerate(data['query']['search'], 1):
-                    # Clean HTML snippets from Wikipedia
-                    snippet = (
-                        item['snippet']
-                        .replace('<span class="searchmatch">', '**')
-                        .replace('</span>', '**')
-                    )
-                    results.append(f"{i}. **{item['title']}**: {snippet}")
+                if not search_data.get('query', {}).get('search'):
+                    return {'error': 'No results found'}
                 
-                return "Wikipedia Results:\n" + "\n".join(results)
+                # Get page content
+                page_ids = [str(item['pageid']) for item in search_data['query']['search']]
+                content_url = (
+                    f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info"
+                    f"&pageids={'|'.join(page_ids)}&format=json&explaintext=true"
+                    f"&inprop=url"
+                )
+                
+                content_req = urllib.request.Request(content_url, headers=headers)
+                with urllib.request.urlopen(content_req, timeout=10) as response:
+                    content_data = json.loads(response.read().decode('utf-8'))
+                
+                # Structure the results for better LLM understaning
+                articles = []
+                for page_id in page_ids:
+                    page_info = content_data['query']['pages'].get(page_id)
+                    if page_info and 'extract' in page_info:
+                        articles.append({
+                            'title': page_info['title'],
+                            'content': page_info['extract'].strip(),
+                            'pageid': page_info['pageid'],
+                            'url': page_info.get('fullurl', f"https://en.wikipedia.org/?curid={page_id}"),
+                            'wordcount': page_info.get('wordcount', 0)
+                        })
+                
+                return {
+                    'query': query,
+                    'articles': articles,
+                    'total_results': len(articles)
+                }
                 
             except Exception as e:
-                return f"Wikipedia Error: {str(e)}. Try rephrasing your query."
+                return {'error': str(e)}
         
         tools = [
                 {
@@ -565,26 +582,27 @@ class Generator:
                 }
             ]
         
-        # FIX 1: Properly format conversation history as a conversation, not as query-response pairs
         conversation = [
-            {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia capabilities. If you use tools, answer based *only* on the provided results. After receiving tool results, provide a final answer, DO NOT make additional tool calls."}
+            {"role": "system", "content": """You are a helpful assistant with document search and Wikipedia search capabilities.
+            Decide whether you need tools. If you use tools, answer based *only* on the provided results.
+            After receiving tool results, provide a final answer, DO NOT make additional tool calls.
+            If you're not use if the user wants you to access tools, ask the user: Would you like me to use tools to answer your question?
+            At the end of an informative response, ask if the user needs more information or wants to explore more a certain fact."""}
         ]
 
-        # FIX 2: Parse actual conversation history properly
         if history:
-            # Assuming history is a list of dicts with 'query' and 'response' keys
             for item in history:
                 conversation.append({"role": "user", "content": item["query"]})
                 conversation.append({"role": "assistant", "content": item["response"]})
         
-        # Add current query
+        # Add query
         conversation.append({"role": "user", "content": query})
 
         # temperatura e top sampling
-        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
+        sampler = make_sampler(temp=0.8, top_k=50, top_p=0.9)
         logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
 
-        # First call: include tools definition
+        # First call: include tools
         prompt = llm_tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True,
@@ -594,7 +612,7 @@ class Generator:
         
         prompt_cache = make_prompt_cache(llm_model)
         
-        # Generate first response
+        # first LLM call
         response = generate(
             model=llm_model,
             tokenizer=llm_tokenizer,
@@ -606,7 +624,6 @@ class Generator:
             verbose=True
         )
         
-        # Check if response contains a tool call request
         response_text = response.strip()
 
         print("\nFORMATTED PROMPT:")
@@ -626,7 +643,7 @@ class Generator:
                 if not isinstance(tool_calls, list):
                     tool_calls = [tool_calls]
 
-                # CRITICAL: Convert arguments to JSON strings IF they're dicts
+                # Convert arguments to JSON strings IF they're dicts
                 for call in tool_calls:
                     if isinstance(call.get("arguments"), dict):
                         # Convert dict → JSON string (with proper escaping)
@@ -640,7 +657,7 @@ class Generator:
                         "id": call_id,
                         "function": {
                             "name": call["name"],
-                            "arguments": call["arguments"]  # NOW GUARANTEED TO BE STRING
+                            "arguments": call["arguments"]
                         },
                         "type": "function"
                     })
@@ -655,7 +672,7 @@ class Generator:
                 # Execute tools
                 for tool_call in formatted_tool_calls:
                     tool_name = tool_call["function"]["name"]
-                    args_str = tool_call["function"]["arguments"]  # NOW ALWAYS STRING
+                    args_str = tool_call["function"]["arguments"]
                     
                     # Parse the JSON string to get query
                     try:
@@ -680,11 +697,12 @@ class Generator:
                         "tool_call_id": tool_call["id"]
                     })
 
-                # Generate final response without tool results
+                # 2nd LLM call
                 print("\nGenerating final response with tool results...")
                 prompt = llm_tokenizer.apply_chat_template(
                     conversation,
                     add_generation_prompt=True,
+                    tools=tools,
                     tokenize=False
                 )
                 
@@ -712,7 +730,7 @@ class Generator:
                 return response
         return response
             
-    def eval(query, llm_model, llm_tokenizer, rag_response):
+    def eval(query, llm_model, llm_tokenizer, rag_response): # para avaliar qualidade de respostas após usar tools apenas
         system_prompt = f"""
             You are a RAG evaluator judge. Please evaluate the following response based on these criteria with a 0-10 scale:
             1. Context Relevance: How well retrieved documents align with the user's query and are able to address it.
@@ -810,7 +828,6 @@ if __name__ == "__main__":
     import gc
     gc.collect()
 
-
     if ENABLE_SERVER:
         rag_system = retriever
         print(f"Starting RAG server on http://{SERVER_HOST}:{SERVER_PORT}")
@@ -837,16 +854,14 @@ if __name__ == "__main__":
                 
                 #print("\n\nDEBUG:")
                 #print(rag_response)
-
-                # Extract just the response text, not the tuple
+                
+                # history:
                 if isinstance(rag_response, tuple):
-                    response_text = rag_response[0]  # First element is the response text
+                    response_text = rag_response[0]
                 else:
                     response_text = rag_response
-
-                # Store only the text in history
                 history.append({"query": query, "response": response_text})
-                history = history[-6:] # mantem apenas ultimas 3 msgs no chat history
+                history = history[-6:] # mantem apenas ultimas 3 msgs no chat history (llm+user)
                 
                 ##################### EVAL BREAKS AFTER 1 RESPONSE!!!! #########################
 
