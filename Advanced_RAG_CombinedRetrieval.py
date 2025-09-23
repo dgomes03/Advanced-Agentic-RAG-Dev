@@ -22,7 +22,6 @@ from PIL import Image
 import concurrent.futures
 from nltk.tokenize import word_tokenize
 
-
 num_threads = "1"
 
 os.environ["OMP_NUM_THREADS"] = num_threads
@@ -243,6 +242,8 @@ class Indexer:
                 all_metadata.extend(metadata)
 
         return all_chunks, all_metadata
+
+    #def process_csvs():
 
     def get_embeddings(self, chunks, model=None):
         if model is None:
@@ -469,10 +470,10 @@ class Retriever:
         try:
             return self.combined_retrieval(
                 query=query,
-                k=80,
+                k=200,
                 weight_dense=0.6,
                 weight_sparse=0.4,
-                rerank_top_n=6, # final number chunks dado ao LLM
+                rerank_top_n=10, # final number chunks dado ao LLM
                 use_summarization=False
             )
         except Exception as e:
@@ -502,7 +503,7 @@ class Generator:
                 encoded_query = urllib.parse.quote(query)
                 search_url = (
                     f"https://en.wikipedia.org/w/api.php?action=query&list=search"
-                    f"&srsearch={encoded_query}&format=json&srlimit=2&srnamespace=0" # muda o limit para o que quiseres. o ideal é entre 2/3. >2 podes ter >15000 tok 
+                    f"&srsearch={encoded_query}&format=json&srlimit=1&srnamespace=0" # muda o limit para o que quiseres. o ideal é entre 2/3. >2 podes ter >15000 tok 
                 )
                 
                 headers = {'User-Agent': 'YourApp/1.0 (contact@example.com)'}
@@ -531,12 +532,21 @@ class Generator:
                 for page_id in page_ids:
                     page_info = content_data['query']['pages'].get(page_id)
                     if page_info and 'extract' in page_info:
+                        content = page_info['extract'].strip()
+                        
+                        words = content.split()
+                        if len(words) > 3000: # truncar para 3000 palavras max
+                            content = ' '.join(words[:3000]) + '... (content truncated to 3000 words)'
+                            wordcount = 3000
+                        else:
+                            wordcount = len(words)
+                        
                         articles.append({
                             'title': page_info['title'],
-                            'content': page_info['extract'].strip(),
+                            'content': content,
                             'pageid': page_info['pageid'],
                             'url': page_info.get('fullurl', f"https://en.wikipedia.org/?curid={page_id}"),
-                            'wordcount': page_info.get('wordcount', 0)
+                            'wordcount': wordcount
                         })
                 
                 return {
@@ -582,153 +592,230 @@ class Generator:
                 }
             ]
         
+        # temperatura e top sampling
+        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
+        logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
+        
+        max_iterations = 6  # prevenir infinite tool calling
+        iteration = 0
+        current_response = None
+
         conversation = [
-            {"role": "system", "content": """You are a helpful assistant with document search and Wikipedia search capabilities.
-            Decide whether you need tools. If you use tools, answer based *only* on the provided results.
-            After receiving tool results, provide a final answer, DO NOT make additional tool calls.
-            If you're not use if the user wants you to access tools, ask the user: Would you like me to use tools to answer your question?
-            At the end of an informative response, ask if the user needs more information or wants to explore more a certain fact."""}
+            {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia search capabilities. "
+            "Decide whether you need tools. If you use tools, answer based *only* on the provided results. "
+            "If you're not sure if the user wants you to access tools, ask the user: Would you like me to use tools to answer your question? "
+            "After receiving tool results, provide a final answer. *Don't make sequential tool calls*. "
+            "If not enough information is found after tool calling, alert the user that there's no available information to answer the user. "
+            "At the end of an informative response, ask if the user needs more information or wants to explore more a certain fact."}
         ]
 
+        # history
         if history:
             for item in history:
                 conversation.append({"role": "user", "content": item["query"]})
                 conversation.append({"role": "assistant", "content": item["response"]})
         
-        # Add query
+        # Add current query
         conversation.append({"role": "user", "content": query})
-
-        # temperatura e top sampling
-        sampler = make_sampler(temp=0.8, top_k=50, top_p=0.9)
-        logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
-
-        # First call: include tools
-        prompt = llm_tokenizer.apply_chat_template(
-            conversation,
-            add_generation_prompt=True,
-            tools=tools,
-            tokenize=False
-        )
         
-        prompt_cache = make_prompt_cache(llm_model)
-        
-        # first LLM call
-        response = generate(
-            model=llm_model,
-            tokenizer=llm_tokenizer,
-            prompt=prompt,
-            max_tokens=MAX_RESPONSE_TOKENS,
-            sampler=sampler,
-            logits_processors=logits_processors,
-            prompt_cache=prompt_cache,
-            verbose=True
-        )
-        
-        response_text = response.strip()
-
-        print("\nFORMATTED PROMPT:")
-        print(prompt)
-        
-        if "[TOOL_CALLS][" in response_text:
-            print("\nModel requested to use a tool. Processing tool call...")
+        while iteration < max_iterations:
+            # Build the current conversation state
+            current_conversation = conversation.copy()
+            if iteration > 0 and current_response:
+                current_conversation.append({"role": "assistant", "content": current_response})
             
-            try:
-                # Extract tool call JSON
-                start_idx = response_text.find("[TOOL_CALLS][") + len("[TOOL_CALLS][")
-                end_idx = response_text.find("]", start_idx)
-                tool_call_str = response_text[start_idx:end_idx]
+            prompt = llm_tokenizer.apply_chat_template(
+                current_conversation,
+                add_generation_prompt=True,
+                tools=tools,
+                tokenize=False
+            )
+            
+            prompt_cache = make_prompt_cache(llm_model)
+            
+            print("\nFORMATTED PROMPT:")
+            print(prompt)
+            
+            response = generate(
+                model=llm_model,
+                tokenizer=llm_tokenizer,
+                prompt=prompt,
+                max_tokens=MAX_RESPONSE_TOKENS,
+                sampler=sampler,
+                logits_processors=logits_processors,
+                prompt_cache=prompt_cache,
+                verbose=True
+            )
+            
+            iteration += 1
+            response_text = response.strip()
+            current_response = response_text
+            
+            # tool call presente?
+            if "[TOOL_CALLS][" in response_text:
+                #print(f"\nIteration {iteration}: Model requested to use tools. Processing tool calls...")
+                #print(f"Raw response: {response_text}")
                 
-                # Parse as JSON (MAY contain arguments as objects)
-                tool_calls = json.loads(tool_call_str)
-                if not isinstance(tool_calls, list):
-                    tool_calls = [tool_calls]
-
-                # Convert arguments to JSON strings IF they're dicts
-                for call in tool_calls:
-                    if isinstance(call.get("arguments"), dict):
-                        # Convert dict → JSON string (with proper escaping)
-                        call["arguments"] = json.dumps(call["arguments"])
-                
-                # Format for conversation (MUST preserve string format)
-                formatted_tool_calls = []
-                for call in tool_calls:
-                    call_id = ''.join(random.choices(string.ascii_letters + string.digits, k=9))
-                    formatted_tool_calls.append({
-                        "id": call_id,
-                        "function": {
-                            "name": call["name"],
-                            "arguments": call["arguments"]
-                        },
-                        "type": "function"
-                    })
-                
-                # Add to conversation
-                conversation.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": formatted_tool_calls
-                })
-                
-                # Execute tools
-                for tool_call in formatted_tool_calls:
-                    tool_name = tool_call["function"]["name"]
-                    args_str = tool_call["function"]["arguments"]
+                try:
+                    start_marker = "[TOOL_CALLS]["
+                    end_marker = "]"
                     
-                    # Parse the JSON string to get query
+                    start_idx = response_text.find(start_marker)
+                    if start_idx == -1:
+                        print("Tool call pattern not found correctly")
+                        # No tool calls found, return the response
+                        break
+                    
+                    start_idx += len(start_marker) - 1  # Keep the opening bracket
+                    
+                    # Find the matching closing bracket for the array
+                    bracket_count = 1
+                    end_idx = start_idx + 1
+                    
+                    while end_idx < len(response_text) and bracket_count > 0:
+                        if response_text[end_idx] == '[':
+                            bracket_count += 1
+                        elif response_text[end_idx] == ']':
+                            bracket_count -= 1
+                        end_idx += 1
+                    
+                    if bracket_count != 0:
+                        print("Unbalanced brackets in tool calls")
+                        break
+                    
+                    # Extract the JSON array (including the brackets)
+                    tool_json = response_text[start_idx:end_idx]
+                    #print(f"Extracted tool JSON: {tool_json}")
+                    
+                    # Parse the JSON array
                     try:
-                        tool_args = json.loads(args_str)
-                        query_str = tool_args["query"]
-                    except (json.JSONDecodeError, KeyError) as e:
-                        return f"Tool call error: Invalid arguments format - {str(e)}"
+                        tool_calls = json.loads(tool_json)
+                        print(f"\nSuccessfully parsed {len(tool_calls)} tool calls")
+                    except json.JSONDecodeError as e:
+                        print(f"Failed to parse tool calls JSON: {e}")
+                        # manual extraction as fallback
+                        tool_content = response_text[start_idx+1:end_idx-1]  # Remove brackets
+                        print(f"Trying manual extraction with: {tool_content}")
+                        
+                        # manual parsing for multiple tool calls
+                        tool_calls = []
+                        # Split by "}, {" to separate tool calls
+                        if "}, {" in tool_content:
+                            parts = tool_content.split("}, {")
+                            for i, part in enumerate(parts):
+                                if i == 0:
+                                    part = part + "}"
+                                elif i == len(parts) - 1:
+                                    part = "{" + part
+                                else:
+                                    part = "{" + part + "}"
+                                
+                                try:
+                                    tool_call = json.loads(part)
+                                    tool_calls.append(tool_call)
+                                except:
+                                    print(f"Failed to parse part: {part}")
+                        else:
+                            try:
+                                tool_call = json.loads("{" + tool_content + "}")
+                                tool_calls = [tool_call]
+                            except:
+                                print("Failed to parse single tool call")
+                                break
                     
-                    print(f"Executing tool: {tool_name} with query: '{query_str}'")
+                    if not tool_calls:
+                        print("No valid tool calls found")
+                        break
                     
-                    # Execute the tool
-                    if tool_name == "search_documents":
-                        tool_result = search_documents_tool(query_str)
-                    elif tool_name == "search_wikipedia":
-                        tool_result = search_wikipedia(query_str)
-                    else:
-                        tool_result = f"Error: Unknown tool: {tool_name}"
-
+                    #print(f"Found {len(tool_calls)} tool call(s): {[call.get('name', 'unknown') for call in tool_calls]}")
+                    
+                    # Add tool call to conversation
+                    formatted_tool_calls = []
+                    for call in tool_calls:
+                        call_id = ''.join(random.choices(string.ascii_letters + string.digits, k=9))
+                        
+                        # Ensure arguments are properly formatted
+                        if isinstance(call.get("arguments"), dict):
+                            arguments_str = json.dumps(call["arguments"])
+                        elif isinstance(call.get("arguments"), str):
+                            # Try to parse as JSON, if fails, assume it's a query string
+                            try:
+                                json.loads(call["arguments"])
+                                arguments_str = call["arguments"]
+                            except json.JSONDecodeError:
+                                arguments_str = json.dumps({"query": call["arguments"]})
+                        else:
+                            arguments_str = json.dumps({"query": str(call.get("arguments", ""))})
+                        
+                        formatted_tool_calls.append({
+                            "id": call_id,
+                            "function": {
+                                "name": call["name"],
+                                "arguments": arguments_str
+                            },
+                            "type": "function"
+                        })
+                    
+                    # Add to conversation
                     conversation.append({
-                        "role": "tool",
-                        "content": tool_result,
-                        "tool_call_id": tool_call["id"]
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": formatted_tool_calls
                     })
-
-                # 2nd LLM call
-                print("\nGenerating final response with tool results...")
-                prompt = llm_tokenizer.apply_chat_template(
-                    conversation,
-                    add_generation_prompt=True,
-                    tools=tools,
-                    tokenize=False
-                )
-                
-                prompt_cache = make_prompt_cache(llm_model)
-                final_response = generate(
-                    model=llm_model,
-                    tokenizer=llm_tokenizer,
-                    prompt=prompt,
-                    max_tokens=MAX_RESPONSE_TOKENS,
-                    sampler=sampler,
-                    logits_processors=logits_processors,
-                    prompt_cache=prompt_cache,
-                    verbose=True
-                )
-
-                print("\nFORMATTED PROMPT:")
-                print(prompt)
-
-                return final_response, prompt
-                
-            except Exception as e:
-                print(f"Error processing tool calls: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                return response
-        return response
+                    
+                    # Execute tools sequentially
+                    tool_results = []
+                    for i, tool_call in enumerate(formatted_tool_calls):
+                        tool_name = tool_call["function"]["name"]
+                        args_str = tool_call["function"]["arguments"]
+                        
+                        # Parse the JSON string to get query
+                        try:
+                            tool_args = json.loads(args_str)
+                            query_str = tool_args["query"]
+                        except (json.JSONDecodeError, KeyError) as e:
+                            tool_result = f"Tool call error: Invalid arguments format - {str(e)}"
+                        else:
+                            print(f"Executing tool {i+1}/{len(formatted_tool_calls)}: {tool_name} with query: '{query_str}'")
+                            
+                            # Execute the tool
+                            if tool_name == "search_documents":
+                                tool_result = search_documents_tool(query_str)
+                            elif tool_name == "search_wikipedia":
+                                tool_result = search_wikipedia(query_str)
+                            else:
+                                tool_result = f"Error: Unknown tool: {tool_name}"
+                        
+                        # Convert result to string if it's not already
+                        if not isinstance(tool_result, str):
+                            tool_result = json.dumps(tool_result)
+                        
+                        # Add tool result to conversation
+                        conversation.append({
+                            "role": "tool",
+                            "content": tool_result,
+                            "tool_call_id": tool_call["id"]
+                        })
+                        tool_results.append(tool_result)
+                    
+                    print("All tool executions completed. Preparing final response...")
+                    
+                    # Continue to next iteration to generate final response
+                    continue
+                    
+                except Exception as e:
+                    print(f"Error processing tool calls: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    break
+            else:
+                # No tool calls needed, return the response
+                print("No tool calls detected, returning response")
+                return response_text, prompt
+        
+        # If we reach maximum iterations, return the current response
+        print(f"Reached maximum tool calls allowed of {max_iterations} calls or encountered error. Returning current response.")
+        return current_response, prompt
             
     def eval(query, llm_model, llm_tokenizer, rag_response): # para avaliar qualidade de respostas após usar tools apenas
         system_prompt = f"""
