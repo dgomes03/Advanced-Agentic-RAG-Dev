@@ -51,6 +51,8 @@ ENABLE_SERVER = False
 SERVER_HOST = 'localhost'
 SERVER_PORT = 5050
 
+# === Reasoning Configuration ===
+ADVANCED_REASONING = True
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
 
@@ -669,7 +671,7 @@ class AgenticPlanner:
         
         user_prompt = f"""Query: {query}
 
-            Decompose this into 2-4 searchable sub-goals. Output JSON only."""
+            Decompose this into 2-3 searchable sub-goals. Output JSON only."""
         
         conversation = [
             {"role": "system", "content": system_prompt},
@@ -805,13 +807,13 @@ class AgenticEvaluator:
         """Evaluate if a goal has been satisfactorily completed"""
         system_prompt = """You are an information completeness evaluator. Assess if the retrieved context adequately addresses the goal.
 
-Output ONLY valid JSON:
-{
-    "is_complete": true/false,
-    "confidence": 0.0-1.0,
-    "missing_aspects": ["aspect1", "aspect2"],
-    "reasoning": "brief explanation"
-}"""
+            Output ONLY valid JSON:
+            {
+                "is_complete": true/false,
+                "confidence": 0.0-1.0,
+                "missing_aspects": ["aspect1", "aspect2"],
+                "reasoning": "brief explanation"
+            }"""
         
         user_prompt = f"""Goal: {goal.description}
 
@@ -850,7 +852,7 @@ Is this sufficient? Output JSON only."""
             eval_result = json.loads(response)
             return eval_result
         except Exception as e:
-            print(f"⚠️  Evaluation parsing failed: {e}")
+            print(f"Evaluation parsing failed: {e}")
             # Fallback evaluation
             return {
                 "is_complete": len(retrieved_context) > 100,
@@ -873,24 +875,25 @@ Is this sufficient? Output JSON only."""
         
         system_prompt = """You are a final completeness evaluator. Assess if we have enough information to answer the original query comprehensively.
 
-Output ONLY valid JSON:
-{
-    "can_answer": true/false,
-    "overall_confidence": 0.0-1.0,
-    "coverage_assessment": "brief assessment",
-    "needs_more_search": true/false
-}"""
+            Output ONLY valid JSON:
+            {
+                "can_answer": true/false,
+                "overall_confidence": 0.0-1.0,
+                "coverage_assessment": "brief assessment",
+                "needs_more_search": true/false
+            }"""
         
-        combined_info = "\n".join(all_info[:2000])  # Limit context
+        # adicionar KV-Cache a isto !!!!!!!!!
+        combined_info = "\n".join(all_info[:8000])  # Limit context
         
         user_prompt = f"""Original query: {plan.main_query}
 
-Completed goals: {plan.get_completion_rate()*100:.0f}%
+            Completed goals: {plan.get_completion_rate()*100:.0f}%
 
-Retrieved information:
-{combined_info}
+            Retrieved information:
+            {combined_info}
 
-Can we answer comprehensively? Output JSON only."""
+            Can we answer comprehensively? Output JSON only."""
         
         conversation = [
             {"role": "system", "content": system_prompt},
@@ -979,7 +982,7 @@ class AgenticGenerator:
             # Step 3: Search for information
             print(f"\nSearching for relevant information...")
             try:
-                retrieved_context = AgenticGenerator.available_tools(query, llm_model, llm_tokenizer, retriever)
+                retrieved_context = AgenticGenerator.available_tools(current_goal.description, llm_model, llm_tokenizer, retriever)
                 current_goal.retrieved_info.append(retrieved_context)
                 print(f"Retrieved {len(retrieved_context)} characters of context")
             except Exception as e:
@@ -1125,7 +1128,12 @@ class AgenticGenerator:
         # Enhanced system prompt to guide tool selection
         conversation = [
             {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia search capabilities. "
-            "Decide whether you need tools."}
+            "Decide whether you need tools. If you use tools, answer based *only* on the provided results. "
+            "If you're not sure if the user wants you to access tools, ask the user. "
+            "After receiving tool results, provide a final answer. "
+            "If not enough information is found after tool calling, alert the user that there's no available information to answer the user. "
+            "At the end of an informative response, ask if the user needs more information or wants to explore more a certain fact. "
+            "**Do not make sequential tool calls**!"}
         ]
 
         # Add current query
@@ -1319,6 +1327,10 @@ class AgenticGenerator:
         print(f"Fatal Error")
         return current_response, prompt
 
+
+# === // ===
+
+
 class Generator:
     @staticmethod
     def summarize_passages(passages, llm_model, llm_tokenizer): # LLM summarizes retrieved info/context.
@@ -1393,27 +1405,88 @@ class Generator:
 
     @staticmethod
     def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None):
-
-        # Updated tools list with metadata retrieval capabilities
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "agentic_generator",
-                    "description": "Call task Agent if user needs to search or is asking something complex.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The search query string."
-                            }
-                        },
-                        "required": ["query"]
+        if ADVANCED_REASONING:
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "agentic_generator",
+                        "description": "Call task Agent if user needs to search or is asking something complex.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query string."
+                                }
+                            },
+                            "required": ["query"]
+                        }
                     }
                 }
-            }
-        ]
+            ]
+        else:
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_documents",
+                        "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query string."
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "retrieve_document_by_name",
+                        "description": "Retrieve an entire document by its filename. Use when user specifically asks for a particular book, report, or document by name.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "document_name": {
+                                    "type": "string",
+                                    "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
+                                }
+                            },
+                            "required": ["document_name"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_available_documents",
+                        "description": "List all available documents in the system. Use when user asks what documents are available or wants to browse the document collection.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_wikipedia",
+                        "description": "Search Wikipedia for factual information and general knowledge.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The search query string for Wikipedia."}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                }
+            ]
 
         # Temperature and top sampling
         sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
@@ -1457,68 +1530,6 @@ class Generator:
                 prompt_cache=prompt_cache,
                 verbose=True
             )
-
-            """tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_documents",
-                    "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The search query string."
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "retrieve_document_by_name",
-                    "description": "Retrieve an entire document by its filename. Use when user specifically asks for a particular book, report, or document by name.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "document_name": {
-                                "type": "string",
-                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
-                            }
-                        },
-                        "required": ["document_name"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_available_documents",
-                    "description": "List all available documents in the system. Use when user asks what documents are available or wants to browse the document collection.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_wikipedia",
-                    "description": "Search Wikipedia for factual information and general knowledge.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The search query string for Wikipedia."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            }
-        ]"""
 
             response_text = response.strip()
 
