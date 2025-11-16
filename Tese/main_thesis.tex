@@ -1,31 +1,5 @@
-% Local IspellDict: en
-% ============================================================
-
-% Official template of
-% - CHAIR OF DATA SCIENCE: MACHINE LEARNING AND DATA ENGINEERING
-% - CHAIR OF DIGITAL INNOVATION AND THE PUBLIC SECTOR
-
-% ============================================================
-
-% xxxxxxxxx  FIRST ADJUST THE FOLLOWING OPTIONS xxxxxxxxx
-
-% a) the language of your thesis to either "english" or "german",
-% b) the type of the thesis to either "bachelor", "master" or "seminar",
-% c) the chair:
-%    "csssa" for Computational Social Science & Systems Analysis,
-%.   "machineLearning" for the Chair of Machine Learning and Data Engineering,
-%.   "datascience" if the thesis is supervised by both CSSSA & Machine Learning,
-%    "dips" for the Chair of Digital Innovation and the Public Sector
-%    "bpm" for the Chair of Information Systems and Business Process Management
-% d) and if the supervisor is equal to the principal supervisor
-    % d1) It is possible that your thesis is supervised only by a postdoc and there is no supervising professor, you can use "postdoc" --> e.g. Dr. Püchel, Dr. Lechtenbörger, Dr. Haskamp, ...
-    % d2) else if there is a professor and a supervisor use "supervisor".
-% e) Whether you want to publish your thesis under free and open license or not (https://creativecommons.org/licenses/by-sa/4.0/legalcode) -> appears at the same page as the declaration of authorship
-% f) If you are writing a thesis jointly with other students, set it to true for (seminar) paper with multiple authors.
-
-
 \documentclass[
-    language=german, % german english
+    language=english, % german english
     thesis=master, % seminar bachelor master
     chair=datascience, % csssa machineLearning datascience dips bpm
     supervisor=supervisor, % supervisor postdoc
@@ -33,10 +7,8 @@
     multiauthor=false, % true false
     ]{settings/wi-thesis}
 
-% ============================================================
-% Include all relevant information for the title page
 
-\title{Title of an Awesome Thesis Which Will Change the World and Reveal Incredible Insights Into Highly Relevant Topics}
+\title{An Efficient and Modular Framework for Advanced Agentic Retrieval-Augmented Generation}
 
 \author{Diogo Henrique Martins Gomes}
 %\author{Maja Mustermann, Max Musterfrau}
@@ -109,6 +81,8 @@
 	% Add content files via the \input{...} -command.
 	% Put the files in the "content" folder.
 	\begin{content}
+		\input{content/00-Acknowledgements}
+		\input{content/01-Abstract}
     	\input{content/01-introduction}
     	\input{content/02-chapter1}
         \input{content/03-chapter2}

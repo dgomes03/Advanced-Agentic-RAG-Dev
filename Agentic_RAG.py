@@ -6,6 +6,9 @@ import string
 import pickle
 import numpy as np
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Tuple
+from enum import Enum
 import faiss
 import pymupdf as fitz
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -19,7 +22,12 @@ import pdfplumber
 import re
 import pytesseract
 from PIL import Image
-from multiprocessing import Pool # ADDED: Import Pool for parallel processing
+from multiprocessing import Pool
+
+"""
+Este script foi para testar oq ta escrito pelo Cursor sobre por o RAG mais agentic. experimentei usar o claude, mas isto ta horrivel. precisa de ser refeito.
+tentar ver se isto tem alguma fundação nas classes novas criadas para alem das normais.
+"""
 
 # Set environment variables for single-threaded performance
 num_threads = "1"
@@ -43,6 +51,9 @@ BM25_DATA_PATH = "Indexes/BM25_index.pkl"
 RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
 MAX_RESPONSE_TOKENS = 1000
 EVAL = False
+MAX_REASONING_STEPS = 5
+MIN_CONFIDENCE_THRESHOLD = 0.7
+
 # === Server Configuration ===
 ENABLE_SERVER = False
 SERVER_HOST = 'localhost'
@@ -59,7 +70,7 @@ if ENABLE_SERVER:
 rag_system = None
 
 def save_pickle(obj, filename):
-    os.makedirs(os.path.dirname(filename), exist_ok=True) # Ensure directory exists
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "wb") as f:
         pickle.dump(obj, f)
 
@@ -73,7 +84,7 @@ def load_pickle(filename):
 # Server routes (only if server is enabled)
 if ENABLE_SERVER:
     app = Flask(__name__)
-    CORS(app)  # Enable Cross-Origin Resource Sharing
+    CORS(app)
 
     @app.route('/query', methods=['POST'])
     def handle_query():
@@ -84,17 +95,14 @@ if ENABLE_SERVER:
 
         def generate():
             try:
-                # Stream the response token by token
-                for text_chunk in Generator.answer_query_with_llm(
+                for text_chunk in AgenticGenerator.agentic_answer_query(
                     query,
                     rag_system.llm_model,
                     rag_system.llm_tokenizer,
-                    rag_system.search_documents_tool,
-                    []
+                    rag_system
                 ):
                     yield f"data: {json.dumps({'text': text_chunk})}\n"
-                    time.sleep(0.01)  # Small delay to make streaming visible
-                # Signal the end of the stream
+                    time.sleep(0.01)
                 yield "data: [DONE]\n"
             except Exception as e:
                 error_msg = f"Error: {str(e)}"
@@ -106,6 +114,516 @@ if ENABLE_SERVER:
     @app.route('/status', methods=['GET'])
     def status():
         return jsonify({'status': 'ready'})
+
+
+# === Agentic Components ===
+
+class ReasoningState(Enum):
+    """States in the reasoning process"""
+    INITIAL_QUERY = "initial_query"
+    PLANNING = "planning"
+    SEARCHING = "searching"
+    EVALUATING = "evaluating"
+    REPLANNING = "replanning"
+    ANSWERING = "answering"
+    COMPLETE = "complete"
+
+@dataclass
+class ReasoningGoal:
+    """Represents a sub-goal in multi-step reasoning"""
+    description: str
+    priority: int
+    status: str = "pending"  # pending, in_progress, completed, failed
+    retrieved_info: List[str] = field(default_factory=list)
+    confidence: float = 0.0
+    
+@dataclass
+class ReasoningPlan:
+    """Complete reasoning plan with multiple goals"""
+    main_query: str
+    goals: List[ReasoningGoal] = field(default_factory=list)
+    current_step: int = 0
+    total_confidence: float = 0.0
+    
+    def add_goal(self, goal: ReasoningGoal):
+        self.goals.append(goal)
+    
+    def get_next_goal(self) -> Optional[ReasoningGoal]:
+        """Get next pending or in_progress goal"""
+        for goal in sorted(self.goals, key=lambda g: g.priority):
+            if goal.status in ["pending", "in_progress"]:
+                return goal
+        return None
+    
+    def is_complete(self) -> bool:
+        """Check if all goals are completed"""
+        return all(g.status == "completed" for g in self.goals)
+    
+    def get_completion_rate(self) -> float:
+        """Get percentage of completed goals"""
+        if not self.goals:
+            return 0.0
+        completed = sum(1 for g in self.goals if g.status == "completed")
+        return completed / len(self.goals)
+
+
+class AgenticPlanner:
+    """Handles planning and replanning of reasoning steps"""
+    
+    @staticmethod
+    def create_initial_plan(query: str, llm_model, llm_tokenizer) -> ReasoningPlan:
+        """Create initial reasoning plan by decomposing the query"""
+        system_prompt = """You are a query decomposition expert. Break down complex queries into logical sub-goals.
+For each sub-goal:
+1. Describe what information is needed
+2. Assign priority (1=highest, 5=lowest)
+3. Keep descriptions clear and searchable
+
+Output ONLY valid JSON in this exact format:
+{
+    "goals": [
+        {"description": "goal description", "priority": 1},
+        {"description": "another goal", "priority": 2}
+    ]
+}"""
+        
+        user_prompt = f"""Query: {query}
+
+Decompose this into 2-4 searchable sub-goals. Output JSON only."""
+        
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        response = generate(
+            llm_model,
+            llm_tokenizer,
+            prompt=prompt,
+            max_tokens=500,
+            verbose=False
+        )
+        
+        # Parse the response
+        plan = ReasoningPlan(main_query=query)
+        try:
+            # Clean response and extract JSON
+            response = response.strip()
+            if '```json' in response:
+                response = response.split('```json')[1].split('```')[0].strip()
+            elif '```' in response:
+                response = response.split('```')[1].split('```')[0].strip()
+            
+            plan_data = json.loads(response)
+            for goal_data in plan_data.get("goals", []):
+                goal = ReasoningGoal(
+                    description=goal_data["description"],
+                    priority=goal_data.get("priority", 3)
+                )
+                plan.add_goal(goal)
+            
+            print(f"\n🎯 Created plan with {len(plan.goals)} goals:")
+            for i, g in enumerate(plan.goals, 1):
+                print(f"  {i}. [{g.priority}] {g.description}")
+                
+        except Exception as e:
+            print(f"⚠️  Plan parsing failed: {e}")
+            # Fallback: treat entire query as single goal
+            plan.add_goal(ReasoningGoal(
+                description=query,
+                priority=1
+            ))
+        
+        return plan
+    
+    @staticmethod
+    def replan(plan: ReasoningPlan, evaluation: Dict, llm_model, llm_tokenizer) -> ReasoningPlan:
+        """Replan based on evaluation results"""
+        system_prompt = """You are a reasoning coordinator. Based on the evaluation, decide if we need additional search goals.
+
+Output ONLY valid JSON:
+{
+    "needs_replanning": true/false,
+    "new_goals": [
+        {"description": "new goal if needed", "priority": 1}
+    ],
+    "reasoning": "brief explanation"
+}"""
+        
+        current_state = {
+            "completed_goals": [g.description for g in plan.goals if g.status == "completed"],
+            "pending_goals": [g.description for g in plan.goals if g.status != "completed"],
+            "evaluation": evaluation
+        }
+        
+        user_prompt = f"""Current state: {json.dumps(current_state, indent=2)}
+
+Should we add more search goals? Output JSON only."""
+        
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        response = generate(
+            llm_model,
+            llm_tokenizer,
+            prompt=prompt,
+            max_tokens=400,
+            verbose=False
+        )
+        
+        try:
+            # Clean and parse response
+            response = response.strip()
+            if '```json' in response:
+                response = response.split('```json')[1].split('```')[0].strip()
+            elif '```' in response:
+                response = response.split('```')[1].split('```')[0].strip()
+            
+            replan_data = json.loads(response)
+            
+            if replan_data.get("needs_replanning", False):
+                print(f"\n🔄 Replanning: {replan_data.get('reasoning', 'Adding new goals')}")
+                for goal_data in replan_data.get("new_goals", []):
+                    new_goal = ReasoningGoal(
+                        description=goal_data["description"],
+                        priority=goal_data.get("priority", 3)
+                    )
+                    plan.add_goal(new_goal)
+                    print(f"  + Added: {new_goal.description}")
+        except Exception as e:
+            print(f"⚠️  Replan parsing failed: {e}")
+        
+        return plan
+
+
+class AgenticEvaluator:
+    """Evaluates completeness and quality of retrieved information"""
+    
+    @staticmethod
+    def evaluate_goal_completion(
+        goal: ReasoningGoal,
+        retrieved_context: str,
+        llm_model,
+        llm_tokenizer
+    ) -> Dict[str, Any]:
+        """Evaluate if a goal has been satisfactorily completed"""
+        system_prompt = """You are an information completeness evaluator. Assess if the retrieved context adequately addresses the goal.
+
+Output ONLY valid JSON:
+{
+    "is_complete": true/false,
+    "confidence": 0.0-1.0,
+    "missing_aspects": ["aspect1", "aspect2"],
+    "reasoning": "brief explanation"
+}"""
+        
+        user_prompt = f"""Goal: {goal.description}
+
+Retrieved context:
+{retrieved_context[:1000]}...
+
+Is this sufficient? Output JSON only."""
+        
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        response = generate(
+            llm_model,
+            llm_tokenizer,
+            prompt=prompt,
+            max_tokens=300,
+            verbose=False
+        )
+        
+        try:
+            # Clean and parse
+            response = response.strip()
+            if '```json' in response:
+                response = response.split('```json')[1].split('```')[0].strip()
+            elif '```' in response:
+                response = response.split('```')[1].split('```')[0].strip()
+            
+            eval_result = json.loads(response)
+            return eval_result
+        except Exception as e:
+            print(f"⚠️  Evaluation parsing failed: {e}")
+            # Fallback evaluation
+            return {
+                "is_complete": len(retrieved_context) > 100,
+                "confidence": 0.5,
+                "missing_aspects": [],
+                "reasoning": "Fallback evaluation"
+            }
+    
+    @staticmethod
+    def evaluate_overall_completeness(
+        plan: ReasoningPlan,
+        llm_model,
+        llm_tokenizer
+    ) -> Dict[str, Any]:
+        """Evaluate overall completeness of the reasoning process"""
+        all_info = []
+        for goal in plan.goals:
+            if goal.retrieved_info:
+                all_info.extend(goal.retrieved_info)
+        
+        system_prompt = """You are a final completeness evaluator. Assess if we have enough information to answer the original query comprehensively.
+
+Output ONLY valid JSON:
+{
+    "can_answer": true/false,
+    "overall_confidence": 0.0-1.0,
+    "coverage_assessment": "brief assessment",
+    "needs_more_search": true/false
+}"""
+        
+        combined_info = "\n".join(all_info[:2000])  # Limit context
+        
+        user_prompt = f"""Original query: {plan.main_query}
+
+Completed goals: {plan.get_completion_rate()*100:.0f}%
+
+Retrieved information:
+{combined_info}
+
+Can we answer comprehensively? Output JSON only."""
+        
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        response = generate(
+            llm_model,
+            llm_tokenizer,
+            prompt=prompt,
+            max_tokens=300,
+            verbose=False
+        )
+        
+        try:
+            response = response.strip()
+            if '```json' in response:
+                response = response.split('```json')[1].split('```')[0].strip()
+            elif '```' in response:
+                response = response.split('```')[1].split('```')[0].strip()
+            
+            eval_result = json.loads(response)
+            return eval_result
+        except Exception as e:
+            print(f"⚠️  Overall evaluation parsing failed: {e}")
+            return {
+                "can_answer": plan.get_completion_rate() > 0.6,
+                "overall_confidence": plan.get_completion_rate(),
+                "coverage_assessment": "Fallback assessment",
+                "needs_more_search": plan.get_completion_rate() < 0.6
+            }
+
+
+class AgenticGenerator:
+    """Main agentic reasoning coordinator"""
+    
+    @staticmethod
+    def agentic_answer_query(
+        query: str,
+        llm_model,
+        llm_tokenizer,
+        retriever,
+        prompt_cache=None
+    ) -> str:
+        """
+        Main agentic loop with multi-step reasoning, evaluation, and replanning
+        """
+        print(f"\n{'='*60}")
+        print(f"🎯 QUERY: {query}")
+        print(f"{'='*60}\n")
+        
+        # Step 1: Create initial plan
+        print("📋 STEP 1: Creating reasoning plan...")
+        plan = AgenticPlanner.create_initial_plan(query, llm_model, llm_tokenizer)
+        
+        reasoning_step = 0
+        max_steps = MAX_REASONING_STEPS
+        
+        # Step 2: Iterative reasoning loop
+        while reasoning_step < max_steps:
+            reasoning_step += 1
+            print(f"\n{'─'*60}")
+            print(f"🔄 REASONING STEP {reasoning_step}/{max_steps}")
+            print(f"{'─'*60}")
+            
+            # Get next goal to work on
+            current_goal = plan.get_next_goal()
+            
+            if current_goal is None:
+                print("✅ All goals completed!")
+                break
+            
+            print(f"🎯 Current Goal: {current_goal.description}")
+            print(f"   Priority: {current_goal.priority} | Status: {current_goal.status}")
+            
+            # Mark goal as in progress
+            current_goal.status = "in_progress"
+            
+            # Step 3: Search for information
+            print(f"\n🔍 Searching for relevant information...")
+            try:
+                retrieved_context = retriever.search_documents_tool(current_goal.description)
+                current_goal.retrieved_info.append(retrieved_context)
+                print(f"✓ Retrieved {len(retrieved_context)} characters of context")
+            except Exception as e:
+                print(f"⚠️  Search failed: {e}")
+                current_goal.status = "failed"
+                continue
+            
+            # Step 4: Evaluate goal completion
+            print(f"\n📊 Evaluating goal completion...")
+            evaluation = AgenticEvaluator.evaluate_goal_completion(
+                current_goal,
+                retrieved_context,
+                llm_model,
+                llm_tokenizer
+            )
+            
+            current_goal.confidence = evaluation.get("confidence", 0.5)
+            
+            print(f"   Complete: {evaluation.get('is_complete', False)}")
+            print(f"   Confidence: {current_goal.confidence:.2f}")
+            print(f"   Reasoning: {evaluation.get('reasoning', 'N/A')}")
+            
+            if evaluation.get("missing_aspects"):
+                print(f"   Missing: {', '.join(evaluation.get('missing_aspects', []))}")
+            
+            # Update goal status based on evaluation
+            if evaluation.get("is_complete", False) and current_goal.confidence >= MIN_CONFIDENCE_THRESHOLD:
+                current_goal.status = "completed"
+                print(f"✅ Goal completed successfully!")
+            elif current_goal.confidence < MIN_CONFIDENCE_THRESHOLD:
+                print(f"⚠️  Low confidence - may need more information")
+                current_goal.status = "completed"  # Move on but flag low confidence
+            else:
+                current_goal.status = "completed"  # Mark as done even if not perfect
+            
+            # Step 5: Check overall progress and decide if replanning needed
+            print(f"\n📈 Overall Progress: {plan.get_completion_rate()*100:.0f}% complete")
+            
+            # Evaluate overall completeness
+            if plan.get_completion_rate() >= 0.5:  # Check after 50% completion
+                print(f"\n🤔 Evaluating overall completeness...")
+                overall_eval = AgenticEvaluator.evaluate_overall_completeness(
+                    plan,
+                    llm_model,
+                    llm_tokenizer
+                )
+                
+                print(f"   Can answer: {overall_eval.get('can_answer', False)}")
+                print(f"   Overall confidence: {overall_eval.get('overall_confidence', 0):.2f}")
+                print(f"   Assessment: {overall_eval.get('coverage_assessment', 'N/A')}")
+                
+                # Step 6: Autonomous stopping decision
+                if overall_eval.get("can_answer", False) and overall_eval.get("overall_confidence", 0) >= MIN_CONFIDENCE_THRESHOLD:
+                    print(f"\n🛑 AUTONOMOUS STOP: Sufficient information gathered")
+                    print(f"   Confidence threshold met: {overall_eval.get('overall_confidence', 0):.2f} >= {MIN_CONFIDENCE_THRESHOLD}")
+                    break
+                
+                # Step 7: Dynamic replanning if needed
+                if overall_eval.get("needs_more_search", False) and reasoning_step < max_steps - 1:
+                    print(f"\n🔄 Replanning needed...")
+                    plan = AgenticPlanner.replan(plan, overall_eval, llm_model, llm_tokenizer)
+        
+        # Step 8: Generate final answer
+        print(f"\n{'='*60}")
+        print(f"📝 GENERATING FINAL ANSWER")
+        print(f"{'='*60}")
+        
+        # Collect all retrieved information
+        all_context = []
+        for goal in plan.goals:
+            if goal.retrieved_info:
+                all_context.extend(goal.retrieved_info)
+        
+        combined_context = "\n\n---\n\n".join(all_context)
+        
+        # Generate final response using the LLM
+        system_prompt = """You are a helpful assistant. Based on the retrieved context, provide a comprehensive answer to the user's query.
+
+Important guidelines:
+- Use ONLY information from the provided context
+- Be specific and cite relevant details
+- If the context doesn't contain enough information, say so
+- Structure your answer clearly
+- Do not make up information"""
+        
+        final_prompt_conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"""Original Query: {query}
+
+Retrieved Context:
+{combined_context[:3000]}
+
+Please provide a comprehensive answer based on this context."""}
+        ]
+        
+        prompt = llm_tokenizer.apply_chat_template(
+            final_prompt_conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
+        
+        final_answer = generate(
+            model=llm_model,
+            tokenizer=llm_tokenizer,
+            prompt=prompt,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            sampler=sampler,
+            prompt_cache=prompt_cache,
+            verbose=False
+        )
+        
+        # Add reasoning summary
+        reasoning_summary = f"""
+
+───────────────────────────────────────────────────────────
+📊 REASONING SUMMARY:
+───────────────────────────────────────────────────────────
+- Total reasoning steps: {reasoning_step}
+- Goals completed: {sum(1 for g in plan.goals if g.status == 'completed')}/{len(plan.goals)}
+- Average confidence: {np.mean([g.confidence for g in plan.goals if g.confidence > 0]):.2f}
+- Information sources: {len(all_context)} contexts retrieved
+───────────────────────────────────────────────────────────
+"""
+        
+        return final_answer.strip() + reasoning_summary
 
 
 class Indexer:
@@ -132,7 +650,7 @@ class Indexer:
                     # Extract tables
                     tables = page.extract_tables()
                     for table_idx, table in enumerate(tables):
-                        if table and any(cell for row in table for cell in row if cell): # Check for non-empty table
+                        if table and any(cell for row in table for cell in row if cell):
                             table_text = '\n'.join([' | '.join(map(str, row)) for row in table if row])
                             elements.append({
                                 'type': 'table',
@@ -150,23 +668,22 @@ class Indexer:
                     # Extract paragraph text
                     text = page.extract_text()
                     if text:
-                        # Use sentence-aware splitting instead of fixed length
                         sentences = re.split(r'(?<=[.!?])\s+', text)
                         current_chunk = []
                         current_length = 0
                         chunks = []
                         for sentence in sentences:
                             if current_length + len(sentence) > max_chunk_length and current_chunk:
-                                chunks.append(" ".join(current_chunk).strip()) # Strip whitespace
+                                chunks.append(" ".join(current_chunk).strip())
                                 current_chunk = [sentence]
                                 current_length = len(sentence)
                             else:
                                 current_chunk.append(sentence)
                                 current_length += len(sentence) + 1
                         if current_chunk:
-                            chunks.append(" ".join(current_chunk).strip()) # Strip whitespace
+                            chunks.append(" ".join(current_chunk).strip())
                         for chunk_idx, chunk in enumerate(chunks):
-                            if chunk: # Only add non-empty chunks
+                            if chunk:
                                 elements.append({
                                     'type': 'text',
                                     'content': chunk,
@@ -184,7 +701,6 @@ class Indexer:
                     if page.images:
                         for img_idx, img_dict in enumerate(page.images):
                             try:
-                                # Check if image has coordinates
                                 if 'x0' in img_dict and 'y0' in img_dict and 'x1' in img_dict and 'y1' in img_dict:
                                     img_x0 = max(0, img_dict["x0"])
                                     img_top = max(0, img_dict["top"])
@@ -209,7 +725,6 @@ class Indexer:
                             except Exception as e:
                                 print(f"Failed OCR on image {img_idx} of page {page_number} in {filename}: {e}")
 
-                    # Save elements
                     for elem in elements:
                         doc_chunks.append(elem['content'])
                         meta = elem['meta'].copy()
@@ -218,31 +733,24 @@ class Indexer:
             print(f"Processed {filename}")
         except Exception as e:
             print(f"Could not read/process {filename}: {e}")
-        # FIXED: Return the correct variables
         return doc_chunks, doc_metadata
 
     def build_metadata_index(self, all_metadata):
-        """
-        Build a reverse index mapping document names to chunk indices
-        Returns: dict with structure {document_name: [list_of_chunk_indices]}
-        """
         metadata_index = {}
         for idx, meta in enumerate(all_metadata):
             doc_name = meta.get('document_name')
             full_doc_id = meta.get('full_document_id')
-            if doc_name and doc_name not in metadata_index: # Check if doc_name exists
+            if doc_name and doc_name not in metadata_index:
                 metadata_index[doc_name] = []
             if doc_name:
                 metadata_index[doc_name].append(idx)
-            if full_doc_id and full_doc_id not in metadata_index: # Check if full_doc_id exists
+            if full_doc_id and full_doc_id not in metadata_index:
                 metadata_index[full_doc_id] = []
             if full_doc_id:
                 metadata_index[full_doc_id].append(idx)
         return metadata_index
 
-    # ADDED: Method to get embeddings
     def get_embeddings(self, texts, model, batch_size=32):
-        """Generate embeddings for a list of texts in batches."""
         all_embeddings = []
         for i in tqdm(range(0, len(texts), batch_size), desc="Generating Embeddings"):
             batch = texts[i:i+batch_size]
@@ -250,19 +758,17 @@ class Indexer:
             all_embeddings.extend(embeddings)
         return np.array(all_embeddings, dtype=np.float32)
 
-    # ADDED: Method to build FAISS index from embeddings
     def build_faiss_index(self, multi_vector_index):
         if not multi_vector_index:
             print("Warning: Multi-vector index is empty. Cannot build FAISS index.")
             return None
         embeddings = np.array([item["embedding"] for item in multi_vector_index]).astype('float32')
         dimension = embeddings.shape[1]
-        index = faiss.IndexFlatIP(dimension) # Inner Product for normalized vectors
-        faiss.normalize_L2(embeddings) # Ensure embeddings are normalized
+        index = faiss.IndexFlatIP(dimension)
+        faiss.normalize_L2(embeddings)
         index.add(embeddings)
         return index
 
-    # ADDED: Method to build BM25 index
     def build_bm25_index(self, texts):
         tokenized_corpus = [doc.lower().split() for doc in texts]
         bm25_index = BM25Okapi(tokenized_corpus)
@@ -279,30 +785,23 @@ class Indexer:
         return index
 
     def save_indices(self, multi_vector_index, bm25, metadata_index, faiss_index=None):
-        """Save all indices including the new metadata index"""
-        # Ensure directory exists
         os.makedirs(os.path.dirname(self.faiss_index_path), exist_ok=True)
         save_pickle(multi_vector_index, self.faiss_index_path)
         save_pickle(bm25, self.bm25_data_path)
-        save_pickle(metadata_index, self.metadata_index_path)  # Save metadata index
+        save_pickle(metadata_index, self.metadata_index_path)
         if faiss_index:
             faiss.write_index(faiss_index, "Indexes/faiss_index.faiss")
 
     def load_indices(self):
-        """Load all indices including metadata index"""
         multi_vector_index = load_pickle(self.faiss_index_path)
         bm25 = load_pickle(self.bm25_data_path)
-        metadata_index = load_pickle(self.metadata_index_path)  # Load metadata index
+        metadata_index = load_pickle(self.metadata_index_path)
         faiss_index = None
         if os.path.exists("Indexes/faiss_index.faiss"):
             faiss_index = faiss.read_index("Indexes/faiss_index.faiss")
         return multi_vector_index, bm25, metadata_index, faiss_index
 
     def retrieve_by_metadata(self, metadata_index, multi_vector_index, document_name):
-        """
-        Retrieve all chunks for a specific document name
-        Returns: list of chunks with their metadata
-        """
         if document_name not in metadata_index:
             return []
         chunk_indices = metadata_index[document_name]
@@ -313,7 +812,6 @@ class Indexer:
         return results
 
     def load_and_content_chunk_pdfs_parallel(self, max_chunk_length=512):
-        """Load and process PDF documents in parallel"""
         pdf_files = [os.path.join(self.documents_dir, f) for f in os.listdir(self.documents_dir)
                     if f.lower().endswith('.pdf')]
         print(f"Found {len(pdf_files)} PDF files to process.")
@@ -322,8 +820,7 @@ class Indexer:
 
         file_infos = [(f, i, max_chunk_length) for i, f in enumerate(pdf_files)]
 
-        # Process files in parallel
-        with Pool(processes=4) as pool: # ADDED: Pool import and usage
+        with Pool(processes=4) as pool:
             results = pool.map(self.process_single_pdf, file_infos)
 
         all_chunks = []
@@ -346,7 +843,7 @@ class Retriever:
         self.llm_model = llm_model
         self.llm_tokenizer = llm_tokenizer
         self.reranker = reranker
-        self.last_retrieved_metadata = [] # ADDED: Initialize attribute
+        self.last_retrieved_metadata = []
 
     @staticmethod
     def normalize_scores(scores):
@@ -384,17 +881,11 @@ class Retriever:
         return [(idx, scores[idx]) for idx in top_indices]
 
     def retrieve_by_metadata(self, document_name, sort_by_page=True):
-        """
-        Retrieve all chunks for a specific document name
-        Returns: list of chunks with their metadata, sorted by page number
-        """
         if document_name not in self.metadata_index:
-            # Try to find partial matches for more flexible retrieval
             matching_docs = [doc for doc in self.metadata_index.keys()
                            if document_name.lower() in doc.lower()]
             if not matching_docs:
                 return [], []
-            # Use the first match, or could return all matches
             document_name = matching_docs[0]
 
         chunk_indices = self.metadata_index[document_name]
@@ -407,7 +898,6 @@ class Retriever:
                     'index': idx
                 })
 
-        # Sort by page number and chunk index for coherent reading order
         if sort_by_page and results:
             results.sort(key=lambda x: (
                 x['metadata'].get('page', 0),
@@ -986,7 +1476,7 @@ if __name__ == "__main__":
 
         print("\nLoading AI models...")
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        llm_model, llm_tokenizer = load(MODEL_PATH) # por adapter path aqui
+        llm_model, llm_tokenizer = load(MODEL_PATH)
         prompt_cache = make_prompt_cache(llm_model)
         reranker = CrossEncoder(RERANKER_MODEL_NAME)
 
@@ -1011,7 +1501,7 @@ if __name__ == "__main__":
         print("Loaded saved indices from disk.")
         print("\nLoading AI models...")
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        llm_model, llm_tokenizer = load(MODEL_PATH) # por adapter path aqui
+        llm_model, llm_tokenizer = load(MODEL_PATH)
         prompt_cache = make_prompt_cache(llm_model)
         reranker = CrossEncoder(RERANKER_MODEL_NAME)
 
@@ -1027,7 +1517,8 @@ if __name__ == "__main__":
         reranker,
     )
     print(f"Index contains {len(multi_vector_index)} chunks.")
-    # Attach the prompt cache to the retriever instance for easy access if needed in server mode
+    
+    # Attach the prompt cache to the retriever instance
     retriever.prompt_cache = prompt_cache
 
     # Force cleanup
@@ -1039,38 +1530,53 @@ if __name__ == "__main__":
         print(f"Starting RAG server on http://{SERVER_HOST}:{SERVER_PORT}")
         app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, use_reloader=False)
     else:
-        # Run in interactive console mode
-        print("\nReady to answer queries. (Type 'exit' to quit)")
+        # Run in interactive console mode with AGENTIC capabilities
+        print("\n" + "="*60)
+        print("🤖 AGENTIC RAG SYSTEM READY")
+        print("="*60)
+        print("\nFeatures:")
+        print("  ✓ Multi-step reasoning with goal tracking")
+        print("  ✓ Self-evaluation of completeness")
+        print("  ✓ Dynamic replanning based on results")
+        print("  ✓ Autonomous search stopping")
+        print("\nType 'exit' to quit\n")
+        
         try:
             while True:
-                query = input("\nEnter your query: ")
+                query = input("\n📝 Enter your query: ")
                 if query.lower() == "exit":
                     break
 
-                rag_response = Generator.answer_query_with_llm(
+                print("\n" + "="*60)
+                print("🔍 Starting agentic reasoning process...")
+                print("="*60)
+                
+                # CHANGED: Use the new agentic method
+                response_text = AgenticGenerator.agentic_answer_query(
                     query,
                     llm_model,
                     llm_tokenizer,
                     retriever,
                     prompt_cache
-                    )
+                )
                 
-                # Ensure rag_response_tuple is a tuple before unpacking
-                if isinstance(rag_response, tuple):
-                    response_text, _ = rag_response
-                else:
-                    response_text = rag_response
-
-                #print("\nRAG Response:\n", response_text)
+                print("\n" + "="*60)
+                print("💡 FINAL ANSWER:")
+                print("="*60)
+                print(response_text)
+                print("="*60 + "\n")
 
                 if EVAL:
-                    print("==========")
-                    # Pass the query and the response text (not the tuple) to eval
+                    print("\n" + "="*60)
+                    print("📊 EVALUATION")
+                    print("="*60)
                     Generator.eval(
                         query,
                         llm_model,
                         llm_tokenizer,
-                        response_text # FIXED: Pass the response text, not the tuple
+                        response_text
                     )
+                    print("="*60 + "\n")
+                    
         except KeyboardInterrupt:
-            print("\nExiting program.")
+            print("\n\n👋 Exiting program. Goodbye!")
