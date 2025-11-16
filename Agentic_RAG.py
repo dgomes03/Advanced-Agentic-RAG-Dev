@@ -174,22 +174,22 @@ class AgenticPlanner:
     def create_initial_plan(query: str, llm_model, llm_tokenizer) -> ReasoningPlan:
         """Create initial reasoning plan by decomposing the query"""
         system_prompt = """You are a query decomposition expert. Break down complex queries into logical sub-goals.
-For each sub-goal:
-1. Describe what information is needed
-2. Assign priority (1=highest, 5=lowest)
-3. Keep descriptions clear and searchable
+            For each sub-goal:
+            1. Describe what information is needed
+            2. Assign priority (1=highest, 5=lowest)
+            3. Keep descriptions clear and searchable
 
-Output ONLY valid JSON in this exact format:
-{
-    "goals": [
-        {"description": "goal description", "priority": 1},
-        {"description": "another goal", "priority": 2}
-    ]
-}"""
+            Output ONLY valid JSON in this exact format:
+            {
+                "goals": [
+                    {"description": "goal description", "priority": 1},
+                    {"description": "another goal", "priority": 2}
+                ]
+            }"""
         
         user_prompt = f"""Query: {query}
 
-Decompose this into 2-4 searchable sub-goals. Output JSON only."""
+            Decompose this into 2-4 searchable sub-goals. Output JSON only."""
         
         conversation = [
             {"role": "system", "content": system_prompt},
@@ -247,14 +247,14 @@ Decompose this into 2-4 searchable sub-goals. Output JSON only."""
         """Replan based on evaluation results"""
         system_prompt = """You are a reasoning coordinator. Based on the evaluation, decide if we need additional search goals.
 
-Output ONLY valid JSON:
-{
-    "needs_replanning": true/false,
-    "new_goals": [
-        {"description": "new goal if needed", "priority": 1}
-    ],
-    "reasoning": "brief explanation"
-}"""
+            Output ONLY valid JSON:
+            {
+                "needs_replanning": true/false,
+                "new_goals": [
+                    {"description": "new goal if needed", "priority": 1}
+                ],
+                "reasoning": "brief explanation"
+            }"""
         
         current_state = {
             "completed_goals": [g.description for g in plan.goals if g.status == "completed"],
@@ -264,7 +264,7 @@ Output ONLY valid JSON:
         
         user_prompt = f"""Current state: {json.dumps(current_state, indent=2)}
 
-Should we add more search goals? Output JSON only."""
+            Should we add more search goals? Output JSON only."""
         
         conversation = [
             {"role": "system", "content": system_prompt},
@@ -450,7 +450,66 @@ Can we answer comprehensively? Output JSON only."""
 
 class AgenticGenerator:
     """Main agentic reasoning coordinator"""
-    
+    def search_wikipedia(query: str) -> str:
+            """Fetch Wikipedia results with structured data for RAG"""
+            try:
+                import urllib.parse
+                import urllib.request
+                import json
+                # Search for pages
+                encoded_query = urllib.parse.quote(query)
+                search_url = (
+                    f"https://en.wikipedia.org/w/api.php?action=query&list=search"
+                    f"&srsearch={encoded_query}&format=json&srlimit=1&srnamespace=0"
+                )
+                headers = {'User-Agent': 'YourApp/1.0 (contact@example.com)'}
+                search_req = urllib.request.Request(search_url, headers=headers)
+                with urllib.request.urlopen(search_req, timeout=10) as response:
+                    search_data = json.loads(response.read().decode('utf-8'))
+
+                if not search_data.get('query', {}).get('search'):
+                    return {'error': 'No results found'}
+
+                # Get page content
+                page_ids = [str(item['pageid']) for item in search_data['query']['search']]
+                content_url = (
+                    f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info"
+                    f"&pageids={'|'.join(page_ids)}&format=json&explaintext=true"
+                    f"&inprop=url"
+                )
+                content_req = urllib.request.Request(content_url, headers=headers)
+                with urllib.request.urlopen(content_req, timeout=10) as response:
+                    content_data = json.loads(response.read().decode('utf-8'))
+
+                # Structure the results for better LLM understanding
+                articles = []
+                for page_id in page_ids:
+                    page_info = content_data['query']['pages'].get(page_id)
+                    if page_info and 'extract' in page_info:
+                        content = page_info['extract'].strip()
+                        words = content.split()
+                        if len(words) > 1000:
+                            content = ' '.join(words[:1000]) + '... (content truncated to 1000 words)'
+                            wordcount = 1000
+                        else:
+                            wordcount = len(words)
+                        articles.append({
+                            'title': page_info['title'],
+                            'content': content,
+                            'pageid': page_info['pageid'],
+                            'url': page_info.get('fullurl', f"https://en.wikipedia.org/?curid={page_id}"),
+                            'wordcount': wordcount
+                        })
+
+                return {
+                    'query': query,
+                    'articles': articles,
+                    'total_results': len(articles)
+                }
+            except Exception as e:
+                return {'error': str(e)}
+
+
     @staticmethod
     def agentic_answer_query(
         query: str,
@@ -463,11 +522,11 @@ class AgenticGenerator:
         Main agentic loop with multi-step reasoning, evaluation, and replanning
         """
         print(f"\n{'='*60}")
-        print(f"🎯 QUERY: {query}")
+        print(f"QUERY: {query}")
         print(f"{'='*60}\n")
         
         # Step 1: Create initial plan
-        print("📋 STEP 1: Creating reasoning plan...")
+        print("Creating reasoning plan...")
         plan = AgenticPlanner.create_initial_plan(query, llm_model, llm_tokenizer)
         
         reasoning_step = 0
@@ -477,18 +536,18 @@ class AgenticGenerator:
         while reasoning_step < max_steps:
             reasoning_step += 1
             print(f"\n{'─'*60}")
-            print(f"🔄 REASONING STEP {reasoning_step}/{max_steps}")
+            print(f"REASONING STEP {reasoning_step}/{max_steps}")
             print(f"{'─'*60}")
             
             # Get next goal to work on
             current_goal = plan.get_next_goal()
             
             if current_goal is None:
-                print("✅ All goals completed!")
+                print("All goals completed!")
                 break
             
-            print(f"🎯 Current Goal: {current_goal.description}")
-            print(f"   Priority: {current_goal.priority} | Status: {current_goal.status}")
+            print(f"Current Goal: {current_goal.description}")
+            print(f"Priority: {current_goal.priority} | Status: {current_goal.status}")
             
             # Mark goal as in progress
             current_goal.status = "in_progress"
@@ -500,7 +559,7 @@ class AgenticGenerator:
                 current_goal.retrieved_info.append(retrieved_context)
                 print(f"✓ Retrieved {len(retrieved_context)} characters of context")
             except Exception as e:
-                print(f"⚠️  Search failed: {e}")
+                print(f"Search failed: {e}")
                 current_goal.status = "failed"
                 continue
             
@@ -515,115 +574,59 @@ class AgenticGenerator:
             
             current_goal.confidence = evaluation.get("confidence", 0.5)
             
-            print(f"   Complete: {evaluation.get('is_complete', False)}")
-            print(f"   Confidence: {current_goal.confidence:.2f}")
-            print(f"   Reasoning: {evaluation.get('reasoning', 'N/A')}")
+            print(f"Complete: {evaluation.get('is_complete', False)}")
+            print(f"Confidence: {current_goal.confidence:.2f}")
+            print(f"Reasoning: {evaluation.get('reasoning', 'N/A')}")
             
             if evaluation.get("missing_aspects"):
-                print(f"   Missing: {', '.join(evaluation.get('missing_aspects', []))}")
+                print(f"Missing: {', '.join(evaluation.get('missing_aspects', []))}")
             
             # Update goal status based on evaluation
             if evaluation.get("is_complete", False) and current_goal.confidence >= MIN_CONFIDENCE_THRESHOLD:
                 current_goal.status = "completed"
-                print(f"✅ Goal completed successfully!")
+                print(f"Goal completed successfully!")
             elif current_goal.confidence < MIN_CONFIDENCE_THRESHOLD:
-                print(f"⚠️  Low confidence - may need more information")
+                print(f"Low confidence - may need more information")
                 current_goal.status = "completed"  # Move on but flag low confidence
             else:
                 current_goal.status = "completed"  # Mark as done even if not perfect
             
             # Step 5: Check overall progress and decide if replanning needed
-            print(f"\n📈 Overall Progress: {plan.get_completion_rate()*100:.0f}% complete")
+            print(f"\nOverall Progress: {plan.get_completion_rate()*100:.0f}% complete")
             
             # Evaluate overall completeness
             if plan.get_completion_rate() >= 0.5:  # Check after 50% completion
-                print(f"\n🤔 Evaluating overall completeness...")
+                print(f"\nEvaluating overall completeness...")
                 overall_eval = AgenticEvaluator.evaluate_overall_completeness(
                     plan,
                     llm_model,
                     llm_tokenizer
                 )
                 
-                print(f"   Can answer: {overall_eval.get('can_answer', False)}")
-                print(f"   Overall confidence: {overall_eval.get('overall_confidence', 0):.2f}")
-                print(f"   Assessment: {overall_eval.get('coverage_assessment', 'N/A')}")
+                print(f"Can answer: {overall_eval.get('can_answer', False)}")
+                print(f"Overall confidence: {overall_eval.get('overall_confidence', 0):.2f}")
+                print(f"Assessment: {overall_eval.get('coverage_assessment', 'N/A')}")
                 
                 # Step 6: Autonomous stopping decision
                 if overall_eval.get("can_answer", False) and overall_eval.get("overall_confidence", 0) >= MIN_CONFIDENCE_THRESHOLD:
-                    print(f"\n🛑 AUTONOMOUS STOP: Sufficient information gathered")
-                    print(f"   Confidence threshold met: {overall_eval.get('overall_confidence', 0):.2f} >= {MIN_CONFIDENCE_THRESHOLD}")
+                    print(f"\nAUTONOMOUS STOP: Sufficient information gathered")
+                    print(f"Confidence threshold met: {overall_eval.get('overall_confidence', 0):.2f} >= {MIN_CONFIDENCE_THRESHOLD}")
                     break
                 
                 # Step 7: Dynamic replanning if needed
                 if overall_eval.get("needs_more_search", False) and reasoning_step < max_steps - 1:
-                    print(f"\n🔄 Replanning needed...")
+                    print(f"\nReplanning needed...")
                     plan = AgenticPlanner.replan(plan, overall_eval, llm_model, llm_tokenizer)
         
         # Step 8: Generate final answer
         print(f"\n{'='*60}")
-        print(f"📝 GENERATING FINAL ANSWER")
+        print(f"GENERATING FINAL ANSWER")
         print(f"{'='*60}")
         
-        # Collect all retrieved information
-        all_context = []
-        for goal in plan.goals:
-            if goal.retrieved_info:
-                all_context.extend(goal.retrieved_info)
+        current_response = Generator.answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=prompt_cache)
         
-        combined_context = "\n\n---\n\n".join(all_context)
-        
-        # Generate final response using the LLM
-        system_prompt = """You are a helpful assistant. Based on the retrieved context, provide a comprehensive answer to the user's query.
 
-Important guidelines:
-- Use ONLY information from the provided context
-- Be specific and cite relevant details
-- If the context doesn't contain enough information, say so
-- Structure your answer clearly
-- Do not make up information"""
-        
-        final_prompt_conversation = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""Original Query: {query}
-
-Retrieved Context:
-{combined_context[:3000]}
-
-Please provide a comprehensive answer based on this context."""}
-        ]
-        
-        prompt = llm_tokenizer.apply_chat_template(
-            final_prompt_conversation,
-            add_generation_prompt=True,
-            tokenize=False
-        )
-        
-        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
-        
-        final_answer = generate(
-            model=llm_model,
-            tokenizer=llm_tokenizer,
-            prompt=prompt,
-            max_tokens=MAX_RESPONSE_TOKENS,
-            sampler=sampler,
-            prompt_cache=prompt_cache,
-            verbose=False
-        )
-        
-        # Add reasoning summary
-        reasoning_summary = f"""
-
-───────────────────────────────────────────────────────────
-📊 REASONING SUMMARY:
-───────────────────────────────────────────────────────────
-- Total reasoning steps: {reasoning_step}
-- Goals completed: {sum(1 for g in plan.goals if g.status == 'completed')}/{len(plan.goals)}
-- Average confidence: {np.mean([g.confidence for g in plan.goals if g.confidence > 0]):.2f}
-- Information sources: {len(all_context)} contexts retrieved
-───────────────────────────────────────────────────────────
-"""
-        
-        return final_answer.strip() + reasoning_summary
+        return current_response
 
 
 class Indexer:
