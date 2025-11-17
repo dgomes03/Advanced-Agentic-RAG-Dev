@@ -52,7 +52,7 @@ SERVER_HOST = 'localhost'
 SERVER_PORT = 5050
 
 # === Reasoning Configuration ===
-ADVANCED_REASONING = True
+ADVANCED_REASONING = False
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
 
@@ -1411,7 +1411,7 @@ class Generator:
                     "type": "function",
                     "function": {
                         "name": "agentic_generator",
-                        "description": "Call task Agent if user needs to search or is asking something complex.",
+                        "description": "Call advanced task agent if user is asking for a difficult task.",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -1419,6 +1419,65 @@ class Generator:
                                     "type": "string",
                                     "description": "The search query string."
                                 }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_documents",
+                        "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query string."
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "retrieve_document_by_name",
+                        "description": "Retrieve an entire document by its filename. Use when user specifically asks for a particular book, report, or document by name.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "document_name": {
+                                    "type": "string",
+                                    "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
+                                }
+                            },
+                            "required": ["document_name"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_available_documents",
+                        "description": "List all available documents in the system. Use when user asks what documents are available or wants to browse the document collection.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_wikipedia",
+                        "description": "Search Wikipedia for factual information and general knowledge.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The search query string for Wikipedia."}
                             },
                             "required": ["query"]
                         }
@@ -1507,7 +1566,7 @@ class Generator:
         # Add current query
         conversation.append({"role": "user", "content": query})
         
-        while True: ############### este loop é mesmo necessário? ##################
+        while True:
             prompt = llm_tokenizer.apply_chat_template(
                 conversation,
                 add_generation_prompt=True,
@@ -1517,8 +1576,6 @@ class Generator:
 
             #print("\nFORMATTED PROMPT:") 
             #print(prompt)
-
-            print("\nReasoning...\n")
 
             response = generate(
                 model=llm_model,
@@ -1660,7 +1717,7 @@ class Generator:
                                 tool_result = retriever.list_available_documents_tool()
                             elif tool_name == "search_wikipedia":
                                 query_str = tool_args.get("query", "")
-                                tool_result = search_wikipedia(query_str)
+                                tool_result = Generator.search_wikipedia(query_str)
                             elif tool_name == "agentic_generator":
                                 query_str = tool_args.get("query", "")
                                 tool_result = AgenticGenerator.agentic_answer_query(query_str, llm_model, llm_tokenizer, retriever)
