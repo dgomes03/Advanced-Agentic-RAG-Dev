@@ -55,6 +55,8 @@ SERVER_PORT = 5050
 ADVANCED_REASONING = False
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
+GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"
+GOOGLE_CX = "27078d51accb54f1d" # Google Custom Search Engine ID
 
 if ENABLE_SERVER:
     from flask import Flask, request, jsonify
@@ -1117,6 +1119,20 @@ class AgenticGenerator:
                         "required": ["query"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "google_custom_search",
+                    "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query string."}
+                        },
+                        "required": ["query"]
+                    }
+                }
             }
         ]
 
@@ -1404,6 +1420,40 @@ class Generator:
                 return {'error': str(e)}
 
     @staticmethod
+    def google_custom_search(query: str) -> str:
+        """Fetch Google Custom Search results"""
+        try:
+            import urllib.parse
+            import urllib.request
+            import json
+
+            if GOOGLE_CX == "YOUR_GOOGLE_CX_HERE":
+                return "Error: Google Custom Search Engine ID (CX) is not configured. Please set GOOGLE_CX in the code."
+
+            encoded_query = urllib.parse.quote(query)
+            search_url = (
+                f"https://www.googleapis.com/customsearch/v1?"
+                f"key={GOOGLE_API_KEY}&cx={GOOGLE_CX}&q={encoded_query}"
+            )
+            
+            with urllib.request.urlopen(search_url, timeout=10) as response:
+                search_data = json.loads(response.read().decode('utf-8'))
+
+            if 'items' not in search_data:
+                return "No results found."
+
+            results = []
+            for item in search_data['items'][:5]: # Limit to top 5 results
+                title = item.get('title', 'No title')
+                snippet = item.get('snippet', 'No snippet')
+                link = item.get('link', 'No link')
+                results.append(f"Title: {title}\nSnippet: {snippet}\nLink: {link}\n")
+
+            return "\n---\n".join(results)
+        except Exception as e:
+            return f"Error performing Google Search: {str(e)}"
+
+    @staticmethod
     def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None):
         if ADVANCED_REASONING:
             tools = [
@@ -1482,6 +1532,20 @@ class Generator:
                             "required": ["query"]
                         }
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "google_custom_search",
+                        "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The search query string."}
+                            },
+                            "required": ["query"]
+                        }
+                    }
                 }
             ]
         else:
@@ -1544,6 +1608,20 @@ class Generator:
                             "required": ["query"]
                         }
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "google_custom_search",
+                        "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The search query string."}
+                            },
+                            "required": ["query"]
+                        }
+                    }
                 }
             ]
 
@@ -1574,8 +1652,8 @@ class Generator:
                 tokenize=False
             )
 
-            #print("\nFORMATTED PROMPT:") 
-            #print(prompt)
+            print("\nFORMATTED PROMPT:") 
+            print(prompt)
 
             response = generate(
                 model=llm_model,
@@ -1721,6 +1799,9 @@ class Generator:
                             elif tool_name == "agentic_generator":
                                 query_str = tool_args.get("query", "")
                                 tool_result = AgenticGenerator.agentic_answer_query(query_str, llm_model, llm_tokenizer, retriever)
+                            elif tool_name == "google_custom_search":
+                                query_str = tool_args.get("query", "")
+                                tool_result = Generator.google_custom_search(query_str)
                             else:
                                 tool_result = f"Error: Unknown tool: {tool_name}"
 
