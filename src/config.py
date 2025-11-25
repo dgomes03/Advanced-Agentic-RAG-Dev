@@ -5,6 +5,9 @@ Centralizes all configuration parameters and provides environment variable suppo
 
 import os
 from dataclasses import dataclass
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Set environment variables for single-threaded performance
 num_threads = "1"

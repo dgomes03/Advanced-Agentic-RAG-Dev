@@ -1,1 +1,0 @@
-# placeholder. importa indexer e retriver de main script. altera apenas generator class.
