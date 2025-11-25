@@ -10,3 +10,13 @@
 !Advanced_RAG_CombinedRetrieval.py
 !LRM_Advanced_RAG_CombinedRetrieval.py
 !Agentic_RAG.py
+
+# Include modular structure
+!main.py
+!README_MODULAR.md
+!MIGRATION_GUIDE.md
+!MODULARIZATION_SUMMARY.md
+!.env.example
+!src/
+!src/**/*.py
+!src/**/__init__.py
