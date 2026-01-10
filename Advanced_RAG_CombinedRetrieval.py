@@ -20,7 +20,7 @@ from rank_bm25 import BM25Okapi
 import torch
 import pdfplumber
 import re
-import pytesseract
+import easyocr
 from PIL import Image
 from multiprocessing import Pool # ADDED: Import Pool for parallel processing
 
@@ -39,13 +39,15 @@ faiss.omp_set_num_threads(int(num_threads))
 
 # === Constants ===
 DOCUMENTS_DIR = "/Users/diogogomes/Documents/Uni/Tese Mestrado/RAG_database"
-MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-8b-instruct-mixed-6-8-bit"
-EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-mpnet-base-v2'
+MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Instruct-2512-mixed-8-6-bit"
+EMBEDDING_MODEL_NAME = 'intfloat/multilingual-e5-base'
 MULTIVECTOR_INDEX_PATH = "Indexes/FAISS_index.pkl"
 BM25_DATA_PATH = "Indexes/BM25_index.pkl"
 RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
 MAX_RESPONSE_TOKENS = 1000
 EVAL = False
+
+
 # === Server Configuration ===
 ENABLE_SERVER = False
 SERVER_HOST = 'localhost'
@@ -192,17 +194,41 @@ class Indexer:
 
                     # OCR for images
                     if page.images:
+                        # Initialize EasyOCR reader (will be cached after first use in the process)
+                        if not hasattr(Indexer, '_easyocr_reader'):
+                            Indexer._easyocr_reader = easyocr.Reader(['en', 'pt'], gpu=False)
+
                         for img_idx, img_dict in enumerate(page.images):
                             try:
                                 # Check if image has coordinates
                                 if 'x0' in img_dict and 'y0' in img_dict and 'x1' in img_dict and 'y1' in img_dict:
-                                    img_x0 = max(0, img_dict["x0"])
-                                    img_top = max(0, img_dict["top"])
-                                    img_x1 = min(page.width, img_dict["x1"])
-                                    img_bottom = min(page.height, img_dict["bottom"])
+                                    # Get coordinates and ensure they're valid
+                                    img_x0 = img_dict["x0"]
+                                    img_top = img_dict["top"]
+                                    img_x1 = img_dict["x1"]
+                                    img_bottom = img_dict["bottom"]
+
+                                    # Validate coordinates: ensure x1 > x0 and bottom > top
+                                    if img_x1 <= img_x0 or img_bottom <= img_top:
+                                        continue  # Skip invalid images
+
+                                    # Clamp coordinates to page boundaries
+                                    img_x0 = max(0, min(img_x0, page.width))
+                                    img_x1 = max(0, min(img_x1, page.width))
+                                    img_top = max(0, min(img_top, page.height))
+                                    img_bottom = max(0, min(img_bottom, page.height))
+
+                                    # Skip if area is too small (likely invalid)
+                                    if (img_x1 - img_x0) < 10 or (img_bottom - img_top) < 10:
+                                        continue
+
                                     image = page.crop((img_x0, img_top, img_x1, img_bottom)).to_image(resolution=150)
                                     pil_img = image.original
-                                    ocr_text = pytesseract.image_to_string(pil_img).strip()
+
+                                    # Use EasyOCR to extract text
+                                    result = Indexer._easyocr_reader.readtext(np.array(pil_img))
+                                    ocr_text = ' '.join([text for (_, text, _) in result]).strip()
+
                                     if ocr_text:
                                         elements.append({
                                             'type': 'image_ocr',
@@ -260,6 +286,7 @@ class Indexer:
             all_embeddings.extend(embeddings)
         return np.array(all_embeddings, dtype=np.float32)
 
+
     # ADDED: Method to build FAISS index from embeddings
     def build_faiss_index(self, multi_vector_index):
         if not multi_vector_index:
@@ -302,7 +329,7 @@ class Indexer:
         """Load all indices including metadata index"""
         multi_vector_index = load_pickle(self.faiss_index_path)
         bm25 = load_pickle(self.bm25_data_path)
-        metadata_index = load_pickle(self.metadata_index_path)  # Load metadata index
+        metadata_index = load_pickle(self.metadata_index_path)
         faiss_index = None
         if os.path.exists("Indexes/faiss_index.faiss"):
             faiss_index = faiss.read_index("Indexes/faiss_index.faiss")
@@ -398,14 +425,16 @@ class Retriever:
         Retrieve all chunks for a specific document name
         Returns: list of chunks with their metadata, sorted by page number
         """
+        original_query = document_name
         if document_name not in self.metadata_index:
             # Try to find partial matches for more flexible retrieval
             matching_docs = [doc for doc in self.metadata_index.keys()
                            if document_name.lower() in doc.lower()]
             if not matching_docs:
-                return [], []
+                return []
             # Use the first match, or could return all matches
             document_name = matching_docs[0]
+            print(f"Using partial match: '{document_name}' for query: '{original_query}'")
 
         chunk_indices = self.metadata_index[document_name]
         results = []
@@ -557,8 +586,24 @@ class Retriever:
         try:
             results = self.retrieve_by_metadata(document_name)
             if not results:
-                available_docs = list(self.metadata_index.keys())[:10] # Show first 10 available
-                return f"Document '{document_name}' not found. Available documents: {available_docs}"
+                # More helpful error message with better matching suggestions
+                all_docs = list(self.metadata_index.keys())
+                # Try to find similar document names
+                similar = [doc for doc in all_docs if document_name.lower() in doc.lower() or doc.lower() in document_name.lower()]
+
+                error_msg = f"Document '{document_name}' not found.\n"
+                if similar:
+                    error_msg += f"\nDid you mean one of these?\n"
+                    for doc in similar[:5]:
+                        error_msg += f"  - {doc}\n"
+                else:
+                    error_msg += f"\nAvailable documents (first 10):\n"
+                    for doc in sorted(all_docs)[:10]:
+                        error_msg += f"  - {doc}\n"
+                    if len(all_docs) > 10:
+                        error_msg += f"\n... and {len(all_docs) - 10} more. Use list_available_documents to see all."
+
+                return error_msg
 
             # Combine all chunks with their metadata for context
             document_content = []
@@ -580,22 +625,62 @@ class Retriever:
 
             return header + full_document
         except Exception as e:
-            return f"Error retrieving document '{document_name}': {str(e)}"
+            import traceback
+            return f"Error retrieving document '{document_name}': {str(e)}\n{traceback.format_exc()}"
 
     # Helper tool to list available documents
-    def list_available_documents_tool(self) -> str:
-        """Tool to list all available documents in the index"""
+    def list_available_documents_tool(self, filter_keyword: str = "") -> str:
+        """Tool to list all available documents in the index, optionally filtered by keyword"""
         try:
             doc_names = list(self.metadata_index.keys())
-            # Filter out full_document_id entries if they're not meaningful for users
-            meaningful_docs = [doc for doc in doc_names if not doc.endswith(('_0', '_1', '_2'))]  # Simple heuristic
+            # Group documents: prefer entries without _N suffix (actual filenames)
+            # but include _N entries if they're the only option
+            seen_base_names = set()
+            meaningful_docs = []
+
+            # First pass: add documents that don't match the full_document_id pattern
+            for doc_name in sorted(doc_names):
+                # Check if this looks like a full_document_id (ends with _number)
+                if '_' in doc_name:
+                    parts = doc_name.rsplit('_', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        base_name = parts[0]
+                        seen_base_names.add(base_name)
+                        continue
+                meaningful_docs.append(doc_name)
+
+            # Second pass: add full_document_id entries only if base name wasn't found
+            for doc_name in sorted(doc_names):
+                if '_' in doc_name:
+                    parts = doc_name.rsplit('_', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        base_name = parts[0]
+                        if base_name not in meaningful_docs and doc_name not in meaningful_docs:
+                            meaningful_docs.append(doc_name)
+
             if not meaningful_docs:
                 meaningful_docs = doc_names
+
+            # Apply filter if provided
+            if filter_keyword:
+                filter_lower = filter_keyword.lower()
+                filtered_docs = [doc for doc in meaningful_docs if filter_lower in doc.lower()]
+                if not filtered_docs:
+                    return f"No documents found matching '{filter_keyword}'. Try a different search term or use list_available_documents without a filter to see all documents."
+                meaningful_docs = filtered_docs
+
             document_info = []
-            for doc_name in meaningful_docs[:20]:  # Limit to first 20
+            for doc_name in sorted(meaningful_docs):
                 chunk_count = len(self.metadata_index[doc_name])
                 document_info.append(f"- {doc_name} ({chunk_count} chunks)")
-            return "Available documents:\n" + "\n".join(document_info)
+
+            total_docs = len(meaningful_docs)
+            if filter_keyword:
+                header = f"Documents matching '{filter_keyword}' ({total_docs} found):\n"
+            else:
+                header = f"Available documents ({total_docs} total):\n"
+
+            return header + "\n".join(document_info)
         except Exception as e:
             return f"Error listing documents: {str(e)}"
 
@@ -1099,10 +1184,15 @@ class AgenticGenerator:
                 "type": "function",
                 "function": {
                     "name": "list_available_documents",
-                    "description": "List all available documents in the system. Use when user asks what documents are available or wants to browse the document collection.",
+                    "description": "List available documents in the system. Use when user asks what documents are available. Can filter by keyword - if user asks about specific topics (e.g., 'documents about allometric'), use the filter_keyword parameter to search document names.",
                     "parameters": {
                         "type": "object",
-                        "properties": {}
+                        "properties": {
+                            "filter_keyword": {
+                                "type": "string",
+                                "description": "Optional keyword to filter document names (e.g., 'allometric', 'climate', 'policy'). Leave empty to list all documents."
+                            }
+                        }
                     }
                 }
             },
@@ -1180,63 +1270,53 @@ class AgenticGenerator:
             response_text = response.strip()
 
             # tool call present?
-            if "[TOOL_CALLS][" in response_text:
+            if "[TOOL_CALLS]" in response_text:
                 print(f"\nModel requested to use tools. Processing tool calls...")
                 try:
-                    start_marker = "[TOOL_CALLS]["
-                    end_marker = "]"
-                    start_idx = response_text.find(start_marker)
-                    if start_idx == -1:
-                        print("Tool call pattern not found correctly")
-                        break
-                    start_idx += len(start_marker) - 1
-                    # Find the matching closing bracket for the array
-                    bracket_count = 1
-                    end_idx = start_idx + 1
-                    while end_idx < len(response_text) and bracket_count > 0:
-                        if response_text[end_idx] == '[':
-                            bracket_count += 1
-                        elif response_text[end_idx] == ']':
-                            bracket_count -= 1
-                        end_idx += 1
-                    if bracket_count != 0:
-                        print("Unbalanced brackets in tool calls")
-                        break
-                    # Extract the JSON array
-                    tool_json = response_text[start_idx:end_idx]
-                    print(f"Extracted tool JSON: {tool_json}")
-
-                    # Parse the JSON array
-                    try:
+                    tool_calls = []
+                    
+                    # Check which format we're dealing with
+                    if "[TOOL_CALLS][" in response_text:
+                        # OLD FORMAT: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
+                        start_marker = "[TOOL_CALLS]["
+                        start_idx = response_text.find(start_marker) + len(start_marker) - 1
+                        bracket_count = 1
+                        end_idx = start_idx + 1
+                        while end_idx < len(response_text) and bracket_count > 0:
+                            if response_text[end_idx] == '[':
+                                bracket_count += 1
+                            elif response_text[end_idx] == ']':
+                                bracket_count -= 1
+                            end_idx += 1
+                        tool_json = response_text[start_idx:end_idx]
                         tool_calls = json.loads(tool_json)
-                        print(f"Successfully parsed {len(tool_calls)} tool calls")
-                    except json.JSONDecodeError as e:
-                        print(f"Failed to parse tool calls JSON: {e}")
-                        # manual extraction as fallback
-                        tool_content = response_text[start_idx+1:end_idx-1]
-                        print(f"Trying manual extraction with: {tool_content}")
-                        tool_calls = []
-                        if "}, {" in tool_content:
-                            parts = tool_content.split("}, {")
-                            for i, part in enumerate(parts):
-                                if i == 0:
-                                    part = part + "}"
-                                elif i == len(parts) - 1:
-                                    part = "{" + part
-                                else:
-                                    part = "{" + part + "}"
-                                try:
-                                    tool_call = json.loads(part)
-                                    tool_calls.append(tool_call)
-                                except:
-                                    print(f"Failed to parse part: {part}")
-                        else:
-                            try:
-                                tool_call = json.loads("{" + tool_content + "}")
-                                tool_calls = [tool_call]
-                            except:
-                                print("Failed to parse single tool call")
-                                break
+                        
+                    elif "[ARGS]" in response_text:
+                        # NEW FORMAT: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
+                        tool_section = response_text.split("[TOOL_CALLS]")[1]
+                        tool_name, args_part = tool_section.split("[ARGS]", 1)
+                        tool_name = tool_name.strip()
+                        
+                        # Extract JSON object
+                        args_part = args_part.strip()
+                        brace_count = 0
+                        end_idx = 0
+                        for i, char in enumerate(args_part):
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    end_idx = i + 1
+                                    break
+                        
+                        args_json = args_part[:end_idx] if end_idx > 0 else "{}"
+                        tool_args = json.loads(args_json) if args_json else {}
+                        tool_calls = [{"name": tool_name, "arguments": tool_args}]
+                    
+                    else:
+                        print("Unknown tool call format")
+                        break
 
                     if not tool_calls:
                         print("No valid tool calls found")
@@ -1280,7 +1360,7 @@ class AgenticGenerator:
                     # Add to conversation
                     conversation.append({
                         "role": "assistant",
-                        "content": None,
+                        "content": "",
                         "tool_calls": formatted_tool_calls
                     })
 
@@ -1303,10 +1383,17 @@ class AgenticGenerator:
                                 doc_name = tool_args.get("document_name", "")
                                 tool_result = retriever.retrieve_document_by_name_tool(doc_name)
                             elif tool_name == "list_available_documents":
-                                tool_result = retriever.list_available_documents_tool()
+                                filter_keyword = tool_args.get("filter_keyword", "")
+                                tool_result = retriever.list_available_documents_tool(filter_keyword)
                             elif tool_name == "search_wikipedia":
                                 query_str = tool_args.get("query", "")
                                 tool_result = Generator.search_wikipedia(query_str)
+                            elif tool_name == "agentic_generator":
+                                query_str = tool_args.get("query", "")
+                                tool_result = AgenticGenerator.agentic_answer_query(query_str, llm_model, llm_tokenizer, retriever)
+                            elif tool_name == "google_custom_search":
+                                query_str = tool_args.get("query", "")
+                                tool_result = Generator.google_custom_search(query_str)
                             else:
                                 tool_result = f"Error: Unknown tool: {tool_name}"
 
@@ -1338,7 +1425,6 @@ class AgenticGenerator:
                 print("No tool calls detected, returning response")
                 # FIXED: Return the actual response text and prompt
                 return response_text, prompt
-
         # If we reach maximum iterations, return the current response
         print(f"Fatal Error")
         return current_response, prompt
@@ -1512,10 +1598,15 @@ class Generator:
                     "type": "function",
                     "function": {
                         "name": "list_available_documents",
-                        "description": "List all available documents in the system. Use when user asks what documents are available or wants to browse the document collection.",
+                        "description": "List available documents in the system. Use when user asks what documents are available. Can filter by keyword - if user asks about specific topics (e.g., 'documents about allometric'), use the filter_keyword parameter to search document names.",
                         "parameters": {
                             "type": "object",
-                            "properties": {}
+                            "properties": {
+                                "filter_keyword": {
+                                    "type": "string",
+                                    "description": "Optional keyword to filter document names (e.g., 'allometric', 'climate', 'policy'). Leave empty to list all documents."
+                                }
+                            }
                         }
                     }
                 },
@@ -1588,10 +1679,15 @@ class Generator:
                     "type": "function",
                     "function": {
                         "name": "list_available_documents",
-                        "description": "List all available documents in the system. Use when user asks what documents are available or wants to browse the document collection.",
+                        "description": "List available documents in the system. Use when user asks what documents are available. Can filter by keyword - if user asks about specific topics (e.g., 'documents about allometric'), use the filter_keyword parameter to search document names.",
                         "parameters": {
                             "type": "object",
-                            "properties": {}
+                            "properties": {
+                                "filter_keyword": {
+                                    "type": "string",
+                                    "description": "Optional keyword to filter document names (e.g., 'allometric', 'climate', 'policy'). Leave empty to list all documents."
+                                }
+                            }
                         }
                     }
                 },
@@ -1669,63 +1765,53 @@ class Generator:
             response_text = response.strip()
 
             # tool call present?
-            if "[TOOL_CALLS][" in response_text:
+            if "[TOOL_CALLS]" in response_text:
                 print(f"\nModel requested to use tools. Processing tool calls...")
                 try:
-                    start_marker = "[TOOL_CALLS]["
-                    end_marker = "]"
-                    start_idx = response_text.find(start_marker)
-                    if start_idx == -1:
-                        print("Tool call pattern not found correctly")
-                        break
-                    start_idx += len(start_marker) - 1
-                    # Find the matching closing bracket for the array
-                    bracket_count = 1
-                    end_idx = start_idx + 1
-                    while end_idx < len(response_text) and bracket_count > 0:
-                        if response_text[end_idx] == '[':
-                            bracket_count += 1
-                        elif response_text[end_idx] == ']':
-                            bracket_count -= 1
-                        end_idx += 1
-                    if bracket_count != 0:
-                        print("Unbalanced brackets in tool calls")
-                        break
-                    # Extract the JSON array
-                    tool_json = response_text[start_idx:end_idx]
-                    print(f"Extracted tool JSON: {tool_json}")
-
-                    # Parse the JSON array
-                    try:
+                    tool_calls = []
+                    
+                    # Check which format we're dealing with
+                    if "[TOOL_CALLS][" in response_text:
+                        # OLD FORMAT: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
+                        start_marker = "[TOOL_CALLS]["
+                        start_idx = response_text.find(start_marker) + len(start_marker) - 1
+                        bracket_count = 1
+                        end_idx = start_idx + 1
+                        while end_idx < len(response_text) and bracket_count > 0:
+                            if response_text[end_idx] == '[':
+                                bracket_count += 1
+                            elif response_text[end_idx] == ']':
+                                bracket_count -= 1
+                            end_idx += 1
+                        tool_json = response_text[start_idx:end_idx]
                         tool_calls = json.loads(tool_json)
-                        print(f"Successfully parsed {len(tool_calls)} tool calls")
-                    except json.JSONDecodeError as e:
-                        print(f"Failed to parse tool calls JSON: {e}")
-                        # manual extraction as fallback
-                        tool_content = response_text[start_idx+1:end_idx-1]
-                        print(f"Trying manual extraction with: {tool_content}")
-                        tool_calls = []
-                        if "}, {" in tool_content:
-                            parts = tool_content.split("}, {")
-                            for i, part in enumerate(parts):
-                                if i == 0:
-                                    part = part + "}"
-                                elif i == len(parts) - 1:
-                                    part = "{" + part
-                                else:
-                                    part = "{" + part + "}"
-                                try:
-                                    tool_call = json.loads(part)
-                                    tool_calls.append(tool_call)
-                                except:
-                                    print(f"Failed to parse part: {part}")
-                        else:
-                            try:
-                                tool_call = json.loads("{" + tool_content + "}")
-                                tool_calls = [tool_call]
-                            except:
-                                print("Failed to parse single tool call")
-                                break
+                        
+                    elif "[ARGS]" in response_text:
+                        # NEW FORMAT: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
+                        tool_section = response_text.split("[TOOL_CALLS]")[1]
+                        tool_name, args_part = tool_section.split("[ARGS]", 1)
+                        tool_name = tool_name.strip()
+                        
+                        # Extract JSON object
+                        args_part = args_part.strip()
+                        brace_count = 0
+                        end_idx = 0
+                        for i, char in enumerate(args_part):
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    end_idx = i + 1
+                                    break
+                        
+                        args_json = args_part[:end_idx] if end_idx > 0 else "{}"
+                        tool_args = json.loads(args_json) if args_json else {}
+                        tool_calls = [{"name": tool_name, "arguments": tool_args}]
+                    
+                    else:
+                        print("Unknown tool call format")
+                        break
 
                     if not tool_calls:
                         print("No valid tool calls found")
@@ -1769,7 +1855,7 @@ class Generator:
                     # Add to conversation
                     conversation.append({
                         "role": "assistant",
-                        "content": None,
+                        "content": "",
                         "tool_calls": formatted_tool_calls
                     })
 
@@ -1792,7 +1878,8 @@ class Generator:
                                 doc_name = tool_args.get("document_name", "")
                                 tool_result = retriever.retrieve_document_by_name_tool(doc_name)
                             elif tool_name == "list_available_documents":
-                                tool_result = retriever.list_available_documents_tool()
+                                filter_keyword = tool_args.get("filter_keyword", "")
+                                tool_result = retriever.list_available_documents_tool(filter_keyword)
                             elif tool_name == "search_wikipedia":
                                 query_str = tool_args.get("query", "")
                                 tool_result = Generator.search_wikipedia(query_str)
@@ -1929,7 +2016,7 @@ if __name__ == "__main__":
         metadata_index,
         llm_model,
         llm_tokenizer,
-        reranker,
+        reranker
     )
     print(f"Index contains {len(multi_vector_index)} chunks.")
     # Attach the prompt cache to the retriever instance for easy access if needed in server mode
