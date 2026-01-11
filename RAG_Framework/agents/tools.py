@@ -1,0 +1,196 @@
+"""
+Tool definitions for the RAG Framework.
+Centralizes all tool schemas to avoid duplication.
+"""
+
+from RAG_Framework.core.config import ADVANCED_REASONING
+
+
+def get_tools_for_standard_generator():
+    """
+    Returns the tools list for the standard generator.
+
+    """
+    return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_documents",
+                    "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query string."
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "retrieve_document_by_name",
+                    "description": "Retrieve an entire document by its filename. Use when user specifically asks for a particular book, report, or document by name.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "document_name": {
+                                "type": "string",
+                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
+                            }
+                        },
+                        "required": ["document_name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_available_documents",
+                    "description": "List available documents in the system. Use when user asks what documents are available. Can filter by keyword - if user asks about specific topics (e.g., 'documents about allometric'), use the filter_keyword parameter to search document names.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filter_keyword": {
+                                "type": "string",
+                                "description": "Optional keyword to filter document names (e.g., 'allometric', 'climate', 'policy'). Leave empty to list all documents."
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_wikipedia",
+                    "description": "Search Wikipedia for factual information and general knowledge.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query string for Wikipedia."}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "google_custom_search",
+                    "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query string."}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }
+        ]
+
+
+def get_tools_for_agentic_generator():
+    """
+    Returns the tools list for the agentic reasoning generator.
+    """
+    return [
+        {
+                "type": "function",
+                "function": {
+                    "name": "agentic_generator",
+                    "description": "Call advanced task agent if user is asking for a difficult task.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query string."
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_documents",
+                    "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query string."
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "retrieve_document_by_name",
+                    "description": "Retrieve an entire document by its filename. Use when user specifically asks for a particular book, report, or document by name.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "document_name": {
+                                "type": "string",
+                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
+                            }
+                        },
+                        "required": ["document_name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_available_documents",
+                    "description": "List available documents in the system. Use when user asks what documents are available. Can filter by keyword - if user asks about specific topics (e.g., 'documents about allometric'), use the filter_keyword parameter to search document names.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filter_keyword": {
+                                "type": "string",
+                                "description": "Optional keyword to filter document names (e.g., 'allometric', 'climate', 'policy'). Leave empty to list all documents."
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_wikipedia",
+                    "description": "Search Wikipedia for factual information and general knowledge.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query string for Wikipedia."}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "google_custom_search",
+                    "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query string."}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }
+    ]

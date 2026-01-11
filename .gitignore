@@ -10,6 +10,9 @@
 !Advanced_RAG_CombinedRetrieval.py
 !LRM_Advanced_RAG_CombinedRetrieval.py
 !Agentic_RAG.py
+!RAG_Framework
+!RAG_Framework/**
+!Extras:Deprecated
 
 # Include modular structure
 !main.py
@@ -20,3 +23,19 @@
 !src/
 !src/**/*.py
 !src/**/__init__.py
+RAG_Framework/core/__pycache__/__init__.cpython-313.pyc
+RAG_Framework/core/__pycache__/config.cpython-313.pyc
+RAG_Framework/core/__pycache__/utils.cpython-313.pyc
+RAG_Framework/components/__pycache__/__init__.cpython-313.pyc
+RAG_Framework/components/generators/__pycache__/__init__.cpython-313.pyc
+RAG_Framework/components/generators/__pycache__/reasoning.cpython-313.pyc
+RAG_Framework/components/generators/__pycache__/standard.cpython-313.pyc
+RAG_Framework/components/indexer/__pycache__/__init__.cpython-313.pyc
+RAG_Framework/components/indexer/__pycache__/standard.cpython-313.pyc
+RAG_Framework/components/retrievers/__pycache__/FAISS_BM25.cpython-313.pyc
+RAG_Framework/agents/__pycache__/planner.cpython-313.pyc
+RAG_Framework/agents/__pycache__/evaluator.cpython-313.pyc
+RAG_Framework/agents/__pycache__/__init__.cpython-313.pyc
+RAG_Framework/__pycache__/main.cpython-313.pyc
+RAG_Framework/components/retrievers/__pycache__/__init__.cpython-313.pyc
+RAG_Framework/.DS_Store
