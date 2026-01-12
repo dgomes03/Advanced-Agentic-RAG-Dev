@@ -2,9 +2,10 @@ import os
 import re
 import numpy as np
 import pdfplumber
-import easyocr
+import pytesseract
+from PIL import Image
 import faiss
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 from rank_bm25 import BM25Okapi
 
@@ -19,17 +20,22 @@ from RAG_Framework.core.utils import save_pickle, load_pickle
 class Indexer:
     def __init__(self, documents_dir=DOCUMENTS_DIR, embedding_model_name=EMBEDDING_MODEL_NAME,
                  faiss_index_path=MULTIVECTOR_INDEX_PATH, bm25_data_path=BM25_DATA_PATH,
-                 metadata_index_path=METADATA_INDEX_PATH, faiss_binary_path=FAISS_INDEX_PATH):
+                 metadata_index_path=METADATA_INDEX_PATH, faiss_binary_path=FAISS_INDEX_PATH,
+                 enable_ocr=True, ocr_min_width=50, ocr_min_height=50, ocr_resolution=100):
         self.documents_dir = documents_dir
         self.embedding_model_name = embedding_model_name
         self.faiss_index_path = faiss_index_path
         self.bm25_data_path = bm25_data_path
         self.metadata_index_path = metadata_index_path
         self.faiss_binary_path = faiss_binary_path
+        self.enable_ocr = enable_ocr
+        self.ocr_min_width = ocr_min_width
+        self.ocr_min_height = ocr_min_height
+        self.ocr_resolution = ocr_resolution
 
     @staticmethod
     def process_single_pdf(file_info):
-        file_path, doc_id, max_chunk_length = file_info
+        file_path, doc_id, max_chunk_length, enable_ocr, ocr_min_width, ocr_min_height, ocr_resolution = file_info
         doc_chunks = []
         doc_metadata = []
         filename = os.path.basename(file_path)
@@ -89,12 +95,8 @@ class Indexer:
                                     }
                                 })
 
-                    # OCR for images
-                    if page.images:
-                        # Initialize EasyOCR reader (will be cached after first use in the process)
-                        if not hasattr(Indexer, '_easyocr_reader'):
-                            Indexer._easyocr_reader = easyocr.Reader(['en', 'pt'], gpu=False)
-
+                    # OCR for images (if enabled)
+                    if enable_ocr and page.images:
                         for img_idx, img_dict in enumerate(page.images):
                             try:
                                 # Check if image has coordinates
@@ -115,16 +117,20 @@ class Indexer:
                                     img_top = max(0, min(img_top, page.height))
                                     img_bottom = max(0, min(img_bottom, page.height))
 
-                                    # Skip if area is too small (likely invalid)
-                                    if (img_x1 - img_x0) < 10 or (img_bottom - img_top) < 10:
+                                    # Calculate image dimensions
+                                    img_width = img_x1 - img_x0
+                                    img_height = img_bottom - img_top
+
+                                    # Skip if image is too small (likely decorative or icon)
+                                    if img_width < ocr_min_width or img_height < ocr_min_height:
                                         continue
 
-                                    image = page.crop((img_x0, img_top, img_x1, img_bottom)).to_image(resolution=150)
+                                    # Crop and convert to image with optimized resolution
+                                    image = page.crop((img_x0, img_top, img_x1, img_bottom)).to_image(resolution=ocr_resolution)
                                     pil_img = image.original
 
-                                    # Use EasyOCR to extract text
-                                    result = Indexer._easyocr_reader.readtext(np.array(pil_img))
-                                    ocr_text = ' '.join([text for (_, text, _) in result]).strip()
+                                    # Use Tesseract OCR (much faster than EasyOCR)
+                                    ocr_text = pytesseract.image_to_string(pil_img, lang='eng+por').strip()
 
                                     if ocr_text:
                                         elements.append({
@@ -140,7 +146,8 @@ class Indexer:
                                             }
                                         })
                             except Exception as e:
-                                print(f"Failed OCR on image {img_idx} of page {page_number} in {filename}: {e}")
+                                # Silently skip failed OCR to avoid cluttering output
+                                pass
 
                     # Save elements
                     for elem in elements:
@@ -182,7 +189,6 @@ class Indexer:
             embeddings = model.encode(batch)
             all_embeddings.extend(embeddings)
         return np.array(all_embeddings, dtype=np.float32)
-
 
     # ADDED: Method to build FAISS index from embeddings
     def build_faiss_index(self, multi_vector_index):
@@ -254,15 +260,29 @@ class Indexer:
         if not pdf_files:
             return [], []
 
-        file_infos = [(f, i, max_chunk_length) for i, f in enumerate(pdf_files)]
+        # Pass OCR configuration to each process
+        file_infos = [
+            (f, i, max_chunk_length, self.enable_ocr, self.ocr_min_width, self.ocr_min_height, self.ocr_resolution)
+            for i, f in enumerate(pdf_files)
+        ]
 
-        # Process files in parallel
-        with Pool(processes=4) as pool: # ADDED: Pool import and usage
-            results = pool.map(self.process_single_pdf, file_infos)
+        # Use optimal number of processes (cpu_count - 1, minimum 1, maximum 8)
+        num_processes = max(1, min(cpu_count() - 1, 8))
+        print(f"Processing with {num_processes} parallel processes (OCR {'enabled' if self.enable_ocr else 'disabled'})")
+
+        # Process files in parallel with progress bar
+        with Pool(processes=num_processes) as pool:
+            results = list(tqdm(
+                pool.imap(self.process_single_pdf, file_infos),
+                total=len(file_infos),
+                desc="Processing PDFs"
+            ))
 
         all_chunks = []
         all_metadata = []
         for chunks, metadata in results:
             all_chunks.extend(chunks)
             all_metadata.extend(metadata)
+
+        print(f"Extracted {len(all_chunks)} chunks from {len(pdf_files)} documents")
         return all_chunks, all_metadata

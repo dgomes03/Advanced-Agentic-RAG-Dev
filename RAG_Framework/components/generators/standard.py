@@ -1,6 +1,8 @@
 import json
 import random
 import string
+import sys
+import io
 from mlx_lm import generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 
@@ -8,6 +10,90 @@ from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, G
 
 
 class Generator:
+    @staticmethod
+    def _generate_with_streaming(model, tokenizer, prompt, max_tokens, sampler, logits_processors, prompt_cache, stream_callback):
+        """
+        Generate text with real-time streaming via callback.
+        Captures verbose output from MLX generate() and emits tokens as they're generated.
+        """
+        if stream_callback is None:
+            # No streaming, use regular generate
+            return generate(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                logits_processors=logits_processors,
+                prompt_cache=prompt_cache,
+                verbose=True
+            )
+
+        # Redirect stdout to capture verbose output
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = io.StringIO()
+
+        try:
+            # Generate with verbose=True (prints tokens to stdout)
+            # We'll capture these and emit them via callback
+            import threading
+            import time
+
+            # Track what we've already emitted
+            last_pos = 0
+            generation_complete = False
+
+            def monitor_output():
+                nonlocal last_pos, generation_complete
+                while not generation_complete:
+                    # Get current output
+                    current_output = captured_output.getvalue()
+
+                    # Check if there's new content
+                    if len(current_output) > last_pos:
+                        new_content = current_output[last_pos:]
+                        last_pos = len(current_output)
+
+                        # Emit the new token(s)
+                        if stream_callback and new_content.strip():
+                            stream_callback('text_chunk', {'text': new_content})
+
+                    # Small delay to avoid busy waiting
+                    time.sleep(0.01)
+
+            # Start monitoring thread
+            monitor_thread = threading.Thread(target=monitor_output, daemon=True)
+            monitor_thread.start()
+
+            # Generate (this will print to captured_output)
+            result = generate(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                logits_processors=logits_processors,
+                prompt_cache=prompt_cache,
+                verbose=True
+            )
+
+            # Mark generation as complete
+            generation_complete = True
+            monitor_thread.join(timeout=0.1)
+
+            # Emit any remaining content
+            final_output = captured_output.getvalue()
+            if len(final_output) > last_pos:
+                remaining = final_output[last_pos:]
+                if remaining.strip():
+                    stream_callback('text_chunk', {'text': remaining})
+
+            return result
+
+        finally:
+            # Restore stdout
+            sys.stdout = old_stdout
+
     @staticmethod
     def summarize_passages(passages, llm_model, llm_tokenizer): # LLM summarizes retrieved info/context.
         context = "\n".join(passages)
@@ -114,7 +200,7 @@ class Generator:
             return f"Error performing Google Search: {str(e)}"
 
     @staticmethod
-    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None):
+    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None):
         # Import here to avoid circular dependency
         if ADVANCED_REASONING:
             from RAG_Framework.components.generators import AgenticGenerator
@@ -149,10 +235,10 @@ class Generator:
                 tokenize=False
             )
 
-            print("\nFORMATTED PROMPT:") 
+            print("\nFORMATTED PROMPT:")
             print(prompt)
 
-            response = generate(
+            response = Generator._generate_with_streaming(
                 model=llm_model,
                 tokenizer=llm_tokenizer,
                 prompt=prompt,
@@ -160,7 +246,7 @@ class Generator:
                 sampler=sampler,
                 logits_processors=logits_processors,
                 prompt_cache=prompt_cache,
-                verbose=True
+                stream_callback=stream_callback
             )
 
             response_text = response.strip()
@@ -264,13 +350,24 @@ class Generator:
                     tool_results = []
                     for i, tool_call in enumerate(formatted_tool_calls):
                         tool_name = tool_call["function"]["name"]
+                        tool_id = tool_call["id"]
                         args_str = tool_call["function"]["arguments"]
                         try:
                             tool_args = json.loads(args_str)
                         except json.JSONDecodeError as e:
                             tool_result = f"Tool call error: Invalid arguments format - {str(e)}"
+                            tool_args = {}
                         else:
                             print(f"Executing tool {i+1}/{len(formatted_tool_calls)}: {tool_name} with args: {tool_args}")
+
+                            # Emit tool call start event
+                            if stream_callback:
+                                stream_callback('tool_call_start', {
+                                    'tool_id': tool_id,
+                                    'tool_name': tool_name,
+                                    'arguments': tool_args
+                                })
+
                             # Execute the appropriate tool with proper argument extraction
                             if tool_name == "search_documents":
                                 query_str = tool_args.get("query", "")
@@ -297,6 +394,15 @@ class Generator:
                         if not isinstance(tool_result, str):
                             tool_result = json.dumps(tool_result, ensure_ascii=False)
 
+                        # Emit tool call result event
+                        if stream_callback:
+                            stream_callback('tool_call_result', {
+                                'tool_id': tool_id,
+                                'tool_name': tool_name,
+                                'result': tool_result,
+                                'status': 'success' if not tool_result.startswith('Error') else 'error'
+                            })
+
                         #print(tool_result) # mostrar resultados da tool use antes de resposta
 
                         # Add tool result to conversation
@@ -319,6 +425,7 @@ class Generator:
             else:
                 # No tool calls needed, return the response
                 print("No tool calls detected, returning response")
+                # Response was already streamed during generation
                 # FIXED: Return the actual response text and prompt
                 return response_text, prompt
 

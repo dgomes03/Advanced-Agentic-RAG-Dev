@@ -38,10 +38,3 @@ MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
 GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"
 GOOGLE_CX = "27078d51accb54f1d" # Google Custom Search Engine ID
-
-if ENABLE_SERVER:
-    from flask import Flask, request, jsonify
-    from flask_cors import CORS
-    import threading
-    import time
-    from flask import Response, stream_with_context

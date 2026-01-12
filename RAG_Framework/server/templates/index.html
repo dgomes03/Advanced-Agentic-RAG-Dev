@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Intelligence Assistant</title>
+
+    <!-- KaTeX for LaTeX math rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+          integrity="sha384-nB0miv6/jRmo5UMSSXfpRIYhZDdLW6en0Y7uR97GQqDwXVJ3YVm5n7LSV"
+          crossorigin="anonymous">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
+            integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg"
+            crossorigin="anonymous"></script>
+
+    <!-- Socket.IO client -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/claude-theme.css">
+</head>
+<body>
+    <div class="chat-container">
+        <!-- Header -->
+        <header class="chat-header">
+            <div class="header-content">
+                <h1>Document Intelligence Assistant</h1>
+                <p class="header-subtitle">Powered by advanced RAG technology</p>
+            </div>
+            <div class="status-container">
+                <div class="status-indicator" id="status-indicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text" id="status-text">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Messages Area -->
+        <div class="messages-container">
+            <div class="messages-area" id="messages">
+                <!-- Welcome message -->
+                <div class="welcome-message">
+                    <div class="welcome-icon">📚</div>
+                    <h2>Welcome!</h2>
+                    <p>I'm your Document Intelligence Assistant. I can help you search through documents, retrieve specific information, and answer questions using advanced reasoning.</p>
+                    <div class="welcome-features">
+                        <div class="feature">
+                            <span class="feature-icon">🔍</span>
+                            <span>Semantic search</span>
+                        </div>
+                        <div class="feature">
+                            <span class="feature-icon">📄</span>
+                            <span>Document retrieval</span>
+                        </div>
+                        <div class="feature">
+                            <span class="feature-icon">🧠</span>
+                            <span>Advanced reasoning</span>
+                        </div>
+                        <div class="feature">
+                            <span class="feature-icon">🌐</span>
+                            <span>Web search</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-container">
+            <div class="input-wrapper">
+                <textarea
+                    id="user-input"
+                    class="user-input"
+                    placeholder="Ask about your documents..."
+                    rows="1"
+                    autofocus></textarea>
+                <button id="send-btn" class="send-btn" aria-label="Send message">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M2 10L18 10M18 10L11 3M18 10L11 17"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="input-footer">
+                <span class="input-hint">Press Enter to send, Shift+Enter for new line</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Templates for dynamic content (hidden) -->
+    <template id="user-message-template">
+        <div class="message user-message">
+            <div class="message-content"></div>
+        </div>
+    </template>
+
+    <template id="assistant-message-template">
+        <div class="message assistant-message">
+            <div class="message-avatar">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" fill="currentColor" opacity="0.1"/>
+                    <path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <div class="message-body">
+                <div class="message-content" data-message-id=""></div>
+                <div class="tool-calls-container"></div>
+                <div class="reasoning-container" style="display: none;"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="tool-call-card-template">
+        <div class="tool-call-card" data-tool-id="">
+            <div class="tool-header">
+                <div class="tool-header-left">
+                    <span class="tool-icon"></span>
+                    <span class="tool-name"></span>
+                </div>
+                <span class="tool-status">Running...</span>
+            </div>
+            <div class="tool-args"></div>
+            <div class="tool-result collapsed">
+                <div class="tool-result-header">
+                    <span>Result</span>
+                    <button class="tool-result-toggle" aria-label="Toggle result">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="tool-result-content"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="reasoning-panel-template">
+        <div class="reasoning-panel">
+            <div class="reasoning-header">
+                <div class="reasoning-header-left">
+                    <span class="reasoning-icon">🧠</span>
+                    <span class="reasoning-title">Advanced Reasoning</span>
+                </div>
+                <button class="reasoning-toggle" aria-label="Toggle reasoning panel">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="reasoning-content">
+                <div class="reasoning-phase"></div>
+                <div class="reasoning-goals"></div>
+                <div class="reasoning-progress"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="reasoning-goal-template">
+        <div class="reasoning-goal" data-goal-id="">
+            <div class="goal-header">
+                <span class="goal-status-icon"></span>
+                <span class="goal-text"></span>
+            </div>
+            <div class="goal-footer">
+                <div class="goal-confidence">
+                    <span class="confidence-label">Confidence:</span>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill"></div>
+                    </div>
+                    <span class="confidence-value"></span>
+                </div>
+                <span class="goal-status-badge"></span>
+            </div>
+        </div>
+    </template>
+
+    <!-- Loading indicator template -->
+    <template id="thinking-indicator-template">
+        <div class="thinking-indicator">
+            <div class="thinking-dot"></div>
+            <div class="thinking-dot"></div>
+            <div class="thinking-dot"></div>
+        </div>
+    </template>
+
+    <!-- JavaScript files -->
+    <script src="/static/js/markdown-renderer.js"></script>
+    <script src="/static/js/ui-components.js"></script>
+    <script src="/static/js/websocket-client.js"></script>
+</body>
+</html>

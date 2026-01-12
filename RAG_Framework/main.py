@@ -14,7 +14,8 @@ from mlx_lm.models.cache import make_prompt_cache
 # Import configuration
 from RAG_Framework.core.config import (
     EMBEDDING_MODEL_NAME, MODEL_PATH, RERANKER_MODEL_NAME,
-    ENABLE_SERVER, SERVER_HOST, SERVER_PORT, EVAL, num_threads
+    ENABLE_SERVER, SERVER_HOST, SERVER_PORT, EVAL, num_threads,
+    ADVANCED_REASONING
 )
 
 # Set threading limits
@@ -30,53 +31,15 @@ from RAG_Framework.components.generators import Generator
 # Global RAG system for server mode
 rag_system = None
 
-# Server routes (only if server is enabled)
+# Server module (only import if server is enabled)
 if ENABLE_SERVER:
-    import json
-    import time
-    from flask import Flask, request, jsonify, Response, stream_with_context
-    from flask_cors import CORS
-
-    app = Flask(__name__)
-    CORS(app)  # Enable Cross-Origin Resource Sharing
-
-    @app.route('/query', methods=['POST'])
-    def handle_query():
-        data = request.get_json()
-        query = data.get('query', '')
-        if not query:
-            return jsonify({'error': 'No query provided'}), 400
-
-        def generate():
-            try:
-                # Stream the response token by token
-                for text_chunk in Generator.answer_query_with_llm(
-                    query,
-                    rag_system.llm_model,
-                    rag_system.llm_tokenizer,
-                    rag_system.search_documents_tool,
-                    []
-                ):
-                    yield f"data: {json.dumps({'text': text_chunk})}\n"
-                    time.sleep(0.01)  # Small delay to make streaming visible
-                # Signal the end of the stream
-                yield "data: [DONE]\n"
-            except Exception as e:
-                error_msg = f"Error: {str(e)}"
-                yield f"data: {json.dumps({'error': error_msg})}\n"
-                yield "data: [DONE]\n"
-
-        return Response(stream_with_context(generate()), mimetype='text/event-stream')
-
-    @app.route('/status', methods=['GET'])
-    def status():
-        return jsonify({'status': 'ready'})
+    from RAG_Framework.server import run_server
 
 
 # ==== Main Runtime ====
 if __name__ == "__main__":
     print("Attempting to load saved FAISS index and BM25 index...")
-    indexer = Indexer()
+    indexer = Indexer(enable_ocr=True)
     multi_vector_index, bm25, metadata_index, faiss_index = indexer.load_indices()
 
     if multi_vector_index is None or bm25 is None:
@@ -140,24 +103,40 @@ if __name__ == "__main__":
     if ENABLE_SERVER:
         rag_system = retriever
         print(f"Starting RAG server on http://{SERVER_HOST}:{SERVER_PORT}")
-        app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, use_reloader=False)
+        run_server(retriever, host=SERVER_HOST, port=SERVER_PORT)
     else:
         # Run in interactive console mode
         print("\nReady to answer queries. (Type 'exit' to quit)")
+
+        # Import the appropriate generator based on ADVANCED_REASONING
+        if ADVANCED_REASONING:
+            from RAG_Framework.components.generators.reasoning import AgenticGenerator
+            print("Using Advanced Reasoning mode with agentic generator")
+
         try:
             while True:
                 query = input("\nEnter your query: ")
                 if query.lower() == "exit":
                     break
 
-                rag_response = Generator.answer_query_with_llm(
-                    query,
-                    llm_model,
-                    llm_tokenizer,
-                    retriever,
-                    prompt_cache
+                # Use the appropriate generator based on ADVANCED_REASONING
+                if ADVANCED_REASONING:
+                    rag_response = AgenticGenerator.agentic_answer_query(
+                        query,
+                        llm_model,
+                        llm_tokenizer,
+                        retriever,
+                        prompt_cache
                     )
-                
+                else:
+                    rag_response = Generator.answer_query_with_llm(
+                        query,
+                        llm_model,
+                        llm_tokenizer,
+                        retriever,
+                        prompt_cache
+                    )
+
                 # Ensure rag_response_tuple is a tuple before unpacking
                 if isinstance(rag_response, tuple):
                     response_text, _ = rag_response
