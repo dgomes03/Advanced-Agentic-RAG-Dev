@@ -11,7 +11,7 @@ from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, G
 
 class Generator:
     @staticmethod
-    def _generate_with_streaming(model, tokenizer, prompt, max_tokens, sampler, logits_processors, prompt_cache, stream_callback):
+    def _generate_with_streaming(model, tokenizer, prompt, max_tokens, sampler, logits_processors, prompt_cache, stream_callback, verbose=True):
         """
         Generate text with real-time streaming via callback.
         Captures verbose output from MLX generate() and emits tokens as they're generated.
@@ -26,7 +26,7 @@ class Generator:
                 sampler=sampler,
                 logits_processors=logits_processors,
                 prompt_cache=prompt_cache,
-                verbose=True
+                verbose=verbose
             )
 
         # Redirect stdout to capture verbose output
@@ -54,6 +54,15 @@ class Generator:
                         new_content = current_output[last_pos:]
                         last_pos = len(current_output)
 
+                        # Filter out verbose stats lines (Prompt:, Generation:, Peak memory:, =====)
+                        if not verbose and stream_callback:
+                            # Skip stats lines
+                            lines_to_emit = []
+                            for line in new_content.split('\n'):
+                                if not any(marker in line for marker in ['Prompt:', 'Generation:', 'Peak memory:', '====', 'tokens-per-sec']):
+                                    lines_to_emit.append(line)
+                            new_content = '\n'.join(lines_to_emit)
+
                         # Emit the new token(s)
                         if stream_callback and new_content.strip():
                             stream_callback('text_chunk', {'text': new_content})
@@ -66,6 +75,7 @@ class Generator:
             monitor_thread.start()
 
             # Generate (this will print to captured_output)
+            # Always use verbose=True for streaming, but filter output if verbose=False
             result = generate(
                 model=model,
                 tokenizer=tokenizer,
@@ -85,6 +95,15 @@ class Generator:
             final_output = captured_output.getvalue()
             if len(final_output) > last_pos:
                 remaining = final_output[last_pos:]
+
+                # Filter out verbose stats lines if needed
+                if not verbose and stream_callback:
+                    lines_to_emit = []
+                    for line in remaining.split('\n'):
+                        if not any(marker in line for marker in ['Prompt:', 'Generation:', 'Peak memory:', '====', 'tokens-per-sec']):
+                            lines_to_emit.append(line)
+                    remaining = '\n'.join(lines_to_emit)
+
                 if remaining.strip():
                     stream_callback('text_chunk', {'text': remaining})
 
@@ -200,7 +219,7 @@ class Generator:
             return f"Error performing Google Search: {str(e)}"
 
     @staticmethod
-    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None):
+    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None, verbose=True):
         # Import here to avoid circular dependency
         if ADVANCED_REASONING:
             from RAG_Framework.components.generators import AgenticGenerator
@@ -246,7 +265,8 @@ class Generator:
                 sampler=sampler,
                 logits_processors=logits_processors,
                 prompt_cache=prompt_cache,
-                stream_callback=stream_callback
+                stream_callback=stream_callback,
+                verbose=verbose
             )
 
             response_text = response.strip()
@@ -447,7 +467,7 @@ class Generator:
             Be precise and objective on your scores! Be very critic.
         """
         user_prompt = f"""
-User Query: {query}
+            User Query: {query}
             Response and context: {rag_response}
         """
         eval_conversation = [

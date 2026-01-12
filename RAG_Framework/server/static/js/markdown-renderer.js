@@ -10,8 +10,45 @@ class MarkdownRenderer {
     static render(text) {
         if (!text) return '';
 
-        // Escape HTML first to prevent XSS
-        let html = this.escapeHtml(text);
+        // Remove tool call syntax from text
+        let html = text;
+
+        // Remove [TOOL_CALLS]tool_name[ARGS]{...} patterns and add paragraph breaks
+        html = html.replace(/\[TOOL_CALLS\][^\[]*\[ARGS\][^\n]*/g, '\n\n');
+
+        // Extract and protect LaTeX math BEFORE HTML escaping
+        const mathPlaceholders = [];
+
+        // Extract display math \[...\]
+        html = html.replace(/\\\[([\s\S]*?)\\\]/g, (match, math) => {
+            const id = mathPlaceholders.length;
+            mathPlaceholders.push({ type: 'display', math: math.trim() });
+            return `__MATH_DISPLAY_${id}__`;
+        });
+
+        // Extract display math $$...$$
+        html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match, math) => {
+            const id = mathPlaceholders.length;
+            mathPlaceholders.push({ type: 'display', math: math.trim() });
+            return `__MATH_DISPLAY_${id}__`;
+        });
+
+        // Extract inline math \(...\)
+        html = html.replace(/\\\(([\s\S]*?)\\\)/g, (match, math) => {
+            const id = mathPlaceholders.length;
+            mathPlaceholders.push({ type: 'inline', math: math.trim() });
+            return `__MATH_INLINE_${id}__`;
+        });
+
+        // Extract inline math $...$
+        html = html.replace(/\$([^$\n]+)\$/g, (match, math) => {
+            const id = mathPlaceholders.length;
+            mathPlaceholders.push({ type: 'inline', math: math.trim() });
+            return `__MATH_INLINE_${id}__`;
+        });
+
+        // Now escape HTML to prevent XSS
+        html = this.escapeHtml(html);
 
         // Process code blocks first (to prevent interference with other processing)
         html = this.processCodeBlocks(html);
@@ -19,8 +56,15 @@ class MarkdownRenderer {
         // Process inline code
         html = this.processInlineCode(html);
 
-        // Process LaTeX math (display and inline)
-        html = this.processLatex(html);
+        // Restore LaTeX math with proper spans
+        mathPlaceholders.forEach((item, id) => {
+            const className = item.type === 'display' ? 'math-display' : 'math-inline';
+            const span = `<span class="${className}" data-math="${this.escapeHtml(item.math)}"></span>`;
+            html = html.replace(`__MATH_${item.type.toUpperCase()}_${id}__`, span);
+        });
+
+        // Process horizontal rules (before other processing)
+        html = this.processHorizontalRules(html);
 
         // Process headings
         html = this.processHeadings(html);
@@ -70,21 +114,13 @@ class MarkdownRenderer {
     }
 
     /**
-     * Process LaTeX math
+     * Process horizontal rules (---, ***, ___)
      */
-    static processLatex(text) {
-        // Display math ($$...$$)
-        text = text.replace(/\$\$([^$]+)\$\$/g, (match, math) => {
-            return `<span class="math-display" data-math="${this.escapeHtml(math)}"></span>`;
-        });
-
-        // Inline math ($...$)
-        text = text.replace(/\$([^$]+)\$/g, (match, math) => {
-            return `<span class="math-inline" data-math="${this.escapeHtml(math)}"></span>`;
-        });
-
-        return text;
+    static processHorizontalRules(text) {
+        // Match --- or *** or ___ on their own line
+        return text.replace(/^(?:---|\*\*\*|___)$/gm, '<hr>');
     }
+
 
     /**
      * Process headings (# heading)
@@ -167,36 +203,46 @@ class MarkdownRenderer {
      */
     static renderMath(element) {
         if (typeof katex === 'undefined') {
-            console.warn('KaTeX not loaded');
+            console.warn('KaTeX not loaded - skipping math rendering');
             return;
         }
 
         // Render display math
         const displayMath = element.querySelectorAll('.math-display');
-        displayMath.forEach(span => {
+        displayMath.forEach((span) => {
             const math = span.getAttribute('data-math');
             try {
+                // Clear existing content
+                span.innerHTML = '';
+                // Render with KaTeX
                 katex.render(math, span, {
                     displayMode: true,
-                    throwOnError: false
+                    throwOnError: false,
+                    strict: false,
+                    trust: false
                 });
             } catch (e) {
-                console.error('KaTeX render error:', e);
+                console.error('KaTeX display render error:', e);
                 span.textContent = `$$${math}$$`;
             }
         });
 
         // Render inline math
         const inlineMath = element.querySelectorAll('.math-inline');
-        inlineMath.forEach(span => {
+        inlineMath.forEach((span) => {
             const math = span.getAttribute('data-math');
             try {
+                // Clear existing content
+                span.innerHTML = '';
+                // Render with KaTeX
                 katex.render(math, span, {
                     displayMode: false,
-                    throwOnError: false
+                    throwOnError: false,
+                    strict: false,
+                    trust: false
                 });
             } catch (e) {
-                console.error('KaTeX render error:', e);
+                console.error('KaTeX inline render error:', e);
                 span.textContent = `$${math}$`;
             }
         });

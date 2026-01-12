@@ -57,30 +57,27 @@ class UIComponents {
         }
 
         const message = messageContent.closest('.message');
-        const toolContainer = message.querySelector('.tool-calls-container');
+        const toolContainer = message.querySelector('.tools-container');
 
         // Clone template
         const template = document.getElementById('tool-call-card-template');
         const clone = template.content.cloneNode(true);
 
-        const card = clone.querySelector('.tool-call-card');
+        const card = clone.querySelector('.tool-card');
         card.setAttribute('data-tool-id', toolData.tool_id);
 
-        // Set tool icon
+        // Set tool icon with SVG
+        const iconElement = card.querySelector('.tool-icon');
         const icon = this.getToolIcon(toolData.tool_name);
-        card.querySelector('.tool-icon').textContent = icon;
+        iconElement.innerHTML = icon;
 
         // Set tool name
-        card.querySelector('.tool-name').textContent = toolData.tool_name;
+        card.querySelector('.tool-name').textContent = this.formatToolName(toolData.tool_name);
 
-        // Set status
+        // Set status with loading spinner
         const status = card.querySelector('.tool-status');
         status.classList.add('running');
-        status.textContent = 'Running...';
-
-        // Set arguments
-        const argsElement = card.querySelector('.tool-args');
-        argsElement.textContent = JSON.stringify(toolData.arguments, null, 2);
+        status.innerHTML = '<div class="tool-loading"></div><span>Running...</span>';
 
         // Hide result initially
         const result = card.querySelector('.tool-result');
@@ -88,13 +85,23 @@ class UIComponents {
 
         // Set up toggle for result
         const toggle = card.querySelector('.tool-result-toggle');
-        const resultHeader = card.querySelector('.tool-result-header');
-        resultHeader.addEventListener('click', () => {
+        toggle.addEventListener('click', () => {
             result.classList.toggle('collapsed');
         });
 
         toolContainer.appendChild(clone);
         this.scrollToBottom();
+    }
+
+    /**
+     * Format tool name for display
+     */
+    static formatToolName(toolName) {
+        // Convert snake_case to Title Case
+        return toolName
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
     }
 
     /**
@@ -107,19 +114,28 @@ class UIComponents {
             return;
         }
 
-        // Update status
+        // Update status - remove loading spinner
         const statusElement = card.querySelector('.tool-status');
         statusElement.classList.remove('running');
         statusElement.classList.add(status);
-        statusElement.textContent = status === 'success' ? 'Completed' : 'Failed';
+
+        if (status === 'success') {
+            statusElement.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2 7l3 3 7-7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg><span>Completed</span>`;
+        } else {
+            statusElement.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2 2l10 10M12 2L2 12" stroke-linecap="round"/>
+            </svg><span>Failed</span>`;
+        }
 
         // Update result content
         const resultContent = card.querySelector('.tool-result-content');
         resultContent.textContent = result;
 
-        // Show result (not collapsed)
+        // Show result section (collapsed by default)
         const resultDiv = card.querySelector('.tool-result');
-        resultDiv.classList.remove('collapsed');
+        resultDiv.classList.add('has-result', 'collapsed');
 
         this.scrollToBottom();
     }
@@ -260,18 +276,38 @@ class UIComponents {
     }
 
     /**
-     * Get tool icon based on tool name
+     * Get tool icon based on tool name (returns SVG)
      */
     static getToolIcon(toolName) {
         const icons = {
-            'search_documents': '🔍',
-            'retrieve_document_by_name': '📄',
-            'list_available_documents': '📚',
-            'search_wikipedia': '🌐',
-            'google_custom_search': '🔎',
-            'agentic_generator': '🧠'
+            'search_documents': `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="8" cy="8" r="6"/>
+                <path d="M13 13l4 4" stroke-linecap="round"/>
+            </svg>`,
+            'retrieve_document_by_name': `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M5 3h8l4 4v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/>
+                <path d="M13 3v4h4"/>
+            </svg>`,
+            'list_available_documents': `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M7 6h8M7 10h8M7 14h8"/>
+                <path d="M4 6h.01M4 10h.01M4 14h.01"/>
+            </svg>`,
+            'search_wikipedia': `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="10" cy="10" r="7"/>
+                <path d="M6 10h8M10 6v8" stroke-linecap="round"/>
+            </svg>`,
+            'google_custom_search': `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="8" cy="8" r="6"/>
+                <path d="M13 13l4 4" stroke-linecap="round"/>
+            </svg>`,
+            'agentic_generator': `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M10 3v14M7 7l3-3 3 3M7 13l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`
         };
-        return icons[toolName] || '🔧';
+        return icons[toolName] || `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="2"/>
+            <circle cx="10" cy="10" r="7"/>
+        </svg>`;
     }
 
     /**

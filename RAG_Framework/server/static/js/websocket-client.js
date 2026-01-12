@@ -104,7 +104,7 @@ class RAGWebSocketClient {
         UIComponents.createUserMessage(message);
 
         // Remove welcome message if it exists
-        const welcomeMessage = document.querySelector('.welcome-message');
+        const welcomeMessage = document.querySelector('.welcome');
         if (welcomeMessage) {
             welcomeMessage.style.animation = 'fadeOut 0.3s ease';
             setTimeout(() => welcomeMessage.remove(), 300);
@@ -157,9 +157,24 @@ class RAGWebSocketClient {
      * Handle text chunk received
      */
     onTextChunk(data) {
-        console.log('Text chunk:', data);
         if (this.currentMessageId) {
-            UIComponents.appendTextToMessage(this.currentMessageId, data.text);
+            const messageContent = document.querySelector(`[data-message-id="${this.currentMessageId}"]`);
+            if (messageContent) {
+                // Accumulate text in data attribute
+                const currentText = messageContent.getAttribute('data-raw-text') || '';
+                const newText = currentText + data.text;
+                messageContent.setAttribute('data-raw-text', newText);
+
+                // Render markdown in real-time
+                const html = MarkdownRenderer.render(newText);
+                messageContent.innerHTML = html;
+
+                // Render math with KaTeX
+                MarkdownRenderer.renderMath(messageContent);
+
+                // Scroll to bottom
+                UIComponents.scrollToBottom();
+            }
         }
     }
 
@@ -222,15 +237,24 @@ class RAGWebSocketClient {
      * Handle completion
      */
     onDone(data) {
-        console.log('Query completed:', data);
+        console.log('Query completed');
 
-        // Render markdown and math in the final message
+        // Final render is already done in real-time, just do final cleanup
         if (this.currentMessageId) {
             const messageContent = document.querySelector(`[data-message-id="${this.currentMessageId}"]`);
             if (messageContent) {
-                const html = MarkdownRenderer.render(messageContent.textContent);
+                // Get the accumulated text from data attribute
+                const rawText = messageContent.getAttribute('data-raw-text') || messageContent.textContent;
+
+                // Final render
+                const html = MarkdownRenderer.render(rawText);
                 messageContent.innerHTML = html;
+
+                // Final math render
                 MarkdownRenderer.renderMath(messageContent);
+
+                // Clean up data attribute
+                messageContent.removeAttribute('data-raw-text');
             }
         }
 

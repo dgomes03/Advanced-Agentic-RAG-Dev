@@ -39,3 +39,7 @@ RAG_Framework/agents/__pycache__/__init__.cpython-313.pyc
 RAG_Framework/__pycache__/main.cpython-313.pyc
 RAG_Framework/components/retrievers/__pycache__/__init__.cpython-313.pyc
 RAG_Framework/.DS_Store
+RAG_Framework/server/__pycache__/app.cpython-313.pyc
+RAG_Framework/server/.DS_Store
+RAG_Framework/server/__pycache__/app.cpython-313.pyc
+

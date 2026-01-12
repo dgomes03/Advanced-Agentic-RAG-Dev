@@ -28,7 +28,7 @@ EVAL = False
 
 
 # === Server Configuration ===
-ENABLE_SERVER = False
+ENABLE_SERVER = True
 SERVER_HOST = 'localhost'
 SERVER_PORT = 5050
 

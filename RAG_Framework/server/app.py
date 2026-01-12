@@ -134,7 +134,8 @@ def create_app(retriever, host='localhost', port=5050):
                     llm_tokenizer=rag_system.llm_tokenizer,
                     retriever=rag_system,
                     prompt_cache=rag_system.prompt_cache if hasattr(rag_system, 'prompt_cache') else None,
-                    stream_callback=stream_callback
+                    stream_callback=stream_callback,
+                    verbose=False
                 )
 
             # Handle response (could be tuple or string)
