@@ -49,7 +49,7 @@ def create_app(retriever, host='localhost', port=5050):
     @app.route('/')
     def index():
         """Serve the main chat interface."""
-        return render_template('index.html')
+        return render_template('standalone.html')
 
     @app.route('/status')
     def status():
@@ -66,7 +66,57 @@ def create_app(retriever, host='localhost', port=5050):
     @socketio.on('disconnect')
     def handle_disconnect():
         """Handle client disconnection."""
-        print(f"Client disconnected")
+        print(f"Client disconnected - any ongoing generation will continue but won't emit events")
+
+    @socketio.on('abort_generation')
+    def handle_abort_generation(data):
+        """
+        Handle abort generation request.
+        Note: MLX generation is blocking and can't be interrupted,
+        but we can at least log the abort request.
+        The disconnect/reconnect will prevent events from being sent.
+        """
+        print(f"\n{'!'*60}")
+        print(f"Generation abort requested by client")
+        print(f"{'!'*60}\n")
+
+    @socketio.on('clear_cache')
+    def handle_clear_cache(data):
+        """
+        Handle cache clearing request from client.
+        Clears the prompt cache by setting it to None.
+        It will be recreated on the next query.
+        """
+        print(f"\n{'='*60}")
+        print(f"Cache clear requested")
+        print(f"{'='*60}\n")
+
+        # Reset prompt cache by setting to None
+        # This avoids GPU command buffer conflicts
+        # The cache will be recreated automatically on next query
+        if hasattr(rag_system, 'prompt_cache'):
+            try:
+                # Import to trigger garbage collection
+                import gc
+
+                # Delete the old cache to free GPU memory
+                old_cache = rag_system.prompt_cache
+                rag_system.prompt_cache = None
+                del old_cache
+
+                # Force garbage collection to clean up GPU resources
+                gc.collect()
+
+                print("Prompt cache cleared - will be recreated on next query")
+                emit('status', {'state': 'connected', 'message': 'Cache cleared - Ready for new conversation'})
+            except Exception as e:
+                print(f"Error clearing cache: {e}")
+                print(f"Setting cache to None anyway...")
+                rag_system.prompt_cache = None
+                emit('status', {'state': 'connected', 'message': 'Ready'})
+        else:
+            print("No prompt cache to clear")
+            emit('status', {'state': 'connected', 'message': 'Ready'})
 
     @socketio.on('query')
     def handle_query(data):

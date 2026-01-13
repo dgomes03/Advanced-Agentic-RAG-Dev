@@ -319,6 +319,7 @@ class RAGWebSocketClient {
 let ragClient;
 document.addEventListener('DOMContentLoaded', () => {
     ragClient = new RAGWebSocketClient();
+    window.ragClient = ragClient; // Make globally accessible
     console.log('RAG WebSocket Client initialized');
 });
 

@@ -126,11 +126,24 @@ class MarkdownRenderer {
      * Process headings (# heading)
      */
     static processHeadings(text) {
-        // H1-H6
-        return text.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, content) => {
+        // First pass: match headings at start of line (with optional leading whitespace)
+        text = text.replace(/^\s*(#{1,6})\s+(.+?)$/gm, (match, hashes, content) => {
             const level = hashes.length;
-            return `<h${level}>${content}</h${level}>`;
+            return `<h${level}>${content.trim()}</h${level}>`;
         });
+
+        // Second pass: catch any remaining # patterns (in case they weren't caught)
+        // This handles cases where headings appear mid-text
+        text = text.replace(/(#{1,6})\s+([^\n]+)/g, (match, hashes, content) => {
+            // Check if this was already converted to an HTML heading
+            if (match.includes('<h')) {
+                return match;
+            }
+            const level = hashes.length;
+            return `<h${level}>${content.trim()}</h${level}>`;
+        });
+
+        return text;
     }
 
     /**
@@ -139,11 +152,13 @@ class MarkdownRenderer {
     static processBoldItalic(text) {
         // Bold: **text** or __text__
         text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
+        text = text.replace(/\b__(.+?)__\b/g, '<strong>$1</strong>');
 
         // Italic: *text* or _text_
-        text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
-        text = text.replace(/_(.+?)_/g, '<em>$1</em>');
+        // Only match * or _ when surrounded by whitespace or at word boundaries
+        // This prevents matching underscores in URLs, numbers, or filenames
+        text = text.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<em>$1</em>');
+        text = text.replace(/(?<!\w)_(.+?)_(?!\w)/g, '<em>$1</em>');
 
         return text;
     }
@@ -152,14 +167,68 @@ class MarkdownRenderer {
      * Process lists
      */
     static processLists(text) {
-        // Unordered lists
-        text = text.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
+        // Preprocess: Split list items that appear inline after other text
+        // Be conservative - only split when we're confident it's a list
 
-        // Ordered lists
-        text = text.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+        // Pattern 1: Split when we see "text. - Item" or "text: - Item" (punctuation before list)
+        text = text.replace(/([.!?:])\s*-\s+([A-Z])/g, '$1\n- $2');
 
-        // Wrap consecutive <li> in <ul> or <ol>
-        text = text.replace(/(<li>.*<\/li>\n?)+/g, (match) => {
+        // Pattern 2: Split numbered/bulleted lists that start after word characters
+        // But NOT if the dash is part of a hyphenated word (like "Sci-Fi")
+        text = text.replace(/([a-z0-9])\s+([-*])\s+([A-Z])/g, (match, before, marker, after, offset) => {
+            // Check if this looks like a list item vs a hyphenated word
+            // If there's punctuation before, it's likely a list
+            const textBefore = text.substring(Math.max(0, offset - 20), offset);
+            if (/[.!?:]\s*$/.test(textBefore) || offset === 0) {
+                return before + '\n' + marker + ' ' + after;
+            }
+            return match;
+        });
+
+        // Split text into lines for processing
+        const lines = text.split('\n');
+        const result = [];
+        let i = 0;
+
+        while (i < lines.length) {
+            const line = lines[i];
+
+            // Check if line starts a list item (unordered or ordered)
+            const unorderedMatch = line.match(/^([\*\-])\s+(.*)$/);
+            const orderedMatch = line.match(/^(\d+\.)\s+(.*)$/);
+
+            if (unorderedMatch || orderedMatch) {
+                const match = unorderedMatch || orderedMatch;
+                let content = match[2];
+                i++;
+
+                // Collect continuation lines (lines that don't start with a list marker or empty line)
+                while (i < lines.length) {
+                    const nextLine = lines[i];
+                    // Stop if we hit another list item, empty line, or another block element
+                    if (nextLine.match(/^[\*\-]\s+/) ||
+                        nextLine.match(/^\d+\.\s+/) ||
+                        nextLine.trim() === '' ||
+                        nextLine.match(/^#{1,6}\s+/) ||
+                        nextLine.match(/^```/)) {
+                        break;
+                    }
+                    // Add continuation line with a space
+                    content += ' ' + nextLine.trim();
+                    i++;
+                }
+
+                result.push(`<li>${content}</li>`);
+            } else {
+                result.push(line);
+                i++;
+            }
+        }
+
+        text = result.join('\n');
+
+        // Wrap consecutive <li> in <ul>
+        text = text.replace(/(<li>.*?<\/li>\n?)+/g, (match) => {
             return `<ul>${match}</ul>`;
         });
 

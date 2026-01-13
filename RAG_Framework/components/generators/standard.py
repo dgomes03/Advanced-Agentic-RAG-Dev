@@ -240,6 +240,7 @@ class Generator:
             "After receiving tool results, provide a final answer. "
             "If not enough information is found after tool calling, alert the user that there's no available information to answer the user. "
             "At the end of an informative response, ask if the user needs more information or wants to explore more a certain fact. "
+            "The current year is 2026."
             "**Do not make sequential tool calls**!"}
         ]
 
