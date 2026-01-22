@@ -16,7 +16,7 @@ PROJECT_ROOT = "/Users/diogogomes/Documents/Uni/Tese Mestrado"
 
 # === Constants ===
 DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "RAG_database")
-MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-3B-Instruct-2512-mixed-8-6-bit"
+MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Instruct-2512-mixed-8-6-bit"
 EMBEDDING_MODEL_NAME = 'intfloat/multilingual-e5-base'
 MULTIVECTOR_INDEX_PATH = os.path.join(PROJECT_ROOT, "Indexes", "FAISS_index.pkl")
 BM25_DATA_PATH = os.path.join(PROJECT_ROOT, "Indexes", "BM25_index.pkl")
@@ -36,5 +36,8 @@ SERVER_PORT = 5050
 ADVANCED_REASONING = False
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
+
+# === Cache Configuration ===
+ENABLE_SELECTIVE_CACHING = True  # Exclude tool results from KV cache to reduce RAM usage
 GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"
 GOOGLE_CX = "27078d51accb54f1d" # Google Custom Search Engine ID

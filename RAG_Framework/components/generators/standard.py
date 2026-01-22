@@ -6,7 +6,8 @@ import io
 from mlx_lm import generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 
-from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, GOOGLE_CX, GOOGLE_API_KEY
+from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, GOOGLE_CX, GOOGLE_API_KEY, ENABLE_SELECTIVE_CACHING
+from RAG_Framework.core.cache_manager import CacheManager
 
 
 class Generator:
@@ -232,6 +233,9 @@ class Generator:
         logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
         current_response = None
 
+        # Selective caching: track checkpoint before tool results are added
+        pre_tool_checkpoint = None
+
         # Enhanced system prompt to guide tool selection
         conversation = [
             {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia search capabilities. "
@@ -275,6 +279,11 @@ class Generator:
             # tool call present?
             if "[TOOL_CALLS]" in response_text:
                 print(f"\nModel requested to use tools. Processing tool calls...")
+
+                # Save cache checkpoint BEFORE processing tool results (selective caching)
+                if ENABLE_SELECTIVE_CACHING and prompt_cache is not None:
+                    pre_tool_checkpoint = CacheManager.get_checkpoint(prompt_cache)
+                    CacheManager.log_cache_stats(prompt_cache, "Pre-tool checkpoint saved")
                 try:
                     tool_calls = []
                     
@@ -446,6 +455,14 @@ class Generator:
             else:
                 # No tool calls needed, return the response
                 print("No tool calls detected, returning response")
+
+                # Restore cache checkpoint to exclude tool results (selective caching)
+                if ENABLE_SELECTIVE_CACHING and pre_tool_checkpoint is not None:
+                    CacheManager.log_cache_stats(prompt_cache, "Before cache restore")
+                    CacheManager.restore_checkpoint(prompt_cache, pre_tool_checkpoint)
+                    CacheManager.log_cache_stats(prompt_cache, "After cache restore (tool results excluded)")
+                    pre_tool_checkpoint = None  # Reset for next query
+
                 # Response was already streamed during generation
                 # FIXED: Return the actual response text and prompt
                 return response_text, prompt
