@@ -18,7 +18,7 @@ class Generator:
         Captures verbose output from MLX generate() and emits tokens as they're generated.
         """
         if stream_callback is None:
-            # No streaming, use regular generate
+            # No streaming, use regular generate!!!!!
             return generate(
                 model=model,
                 tokenizer=tokenizer,
@@ -221,7 +221,7 @@ class Generator:
 
     @staticmethod
     def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None, verbose=True):
-        # Import here to avoid circular dependency
+
         if ADVANCED_REASONING:
             from RAG_Framework.components.generators import AgenticGenerator
         from RAG_Framework.agents.tools import get_tools_for_standard_generator
@@ -238,7 +238,7 @@ class Generator:
 
         # Enhanced system prompt to guide tool selection
         conversation = [
-            {"role": "system", "content": "You are a helpful assistant with document search and Wikipedia search capabilities. "
+            {"role": "system", "content": "You are a helpful assistant with document search and Internet search capabilities. "
             "Decide whether you need tools. If you use tools, answer based *only* on the provided results. "
             "If you're not sure if the user wants you to access tools, ask the user. "
             "After receiving tool results, provide a final answer. "
@@ -262,7 +262,7 @@ class Generator:
             print("\nFORMATTED PROMPT:")
             print(prompt)
 
-            response = Generator._generate_with_streaming(
+            response = Generator._generate_with_streaming( # isto é okay. em caso de n ser servidor ele so devolve oq esta em baixo.
                 model=llm_model,
                 tokenizer=llm_tokenizer,
                 prompt=prompt,
@@ -463,8 +463,6 @@ class Generator:
                     CacheManager.log_cache_stats(prompt_cache, "After cache restore (tool results excluded)")
                     pre_tool_checkpoint = None  # Reset for next query
 
-                # Response was already streamed during generation
-                # FIXED: Return the actual response text and prompt
                 return response_text, prompt
 
         # If we reach maximum iterations, return the current response

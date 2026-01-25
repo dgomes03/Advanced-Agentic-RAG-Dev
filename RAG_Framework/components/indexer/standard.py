@@ -158,7 +158,6 @@ class Indexer:
             print(f"Processed {filename}")
         except Exception as e:
             print(f"Could not read/process {filename}: {e}")
-        # FIXED: Return the correct variables
         return doc_chunks, doc_metadata
 
     def build_metadata_index(self, all_metadata):
@@ -180,7 +179,6 @@ class Indexer:
                 metadata_index[full_doc_id].append(idx)
         return metadata_index
 
-    # ADDED: Method to get embeddings
     def get_embeddings(self, texts, model, batch_size=32):
         """Generate embeddings for a list of texts in batches."""
         all_embeddings = []
@@ -190,7 +188,6 @@ class Indexer:
             all_embeddings.extend(embeddings)
         return np.array(all_embeddings, dtype=np.float32)
 
-    # ADDED: Method to build FAISS index from embeddings
     def build_faiss_index(self, multi_vector_index):
         if not multi_vector_index:
             print("Warning: Multi-vector index is empty. Cannot build FAISS index.")
@@ -202,7 +199,6 @@ class Indexer:
         index.add(embeddings)
         return index
 
-    # ADDED: Method to build BM25 index
     def build_bm25_index(self, texts):
         tokenized_corpus = [doc.lower().split() for doc in texts]
         bm25_index = BM25Okapi(tokenized_corpus)

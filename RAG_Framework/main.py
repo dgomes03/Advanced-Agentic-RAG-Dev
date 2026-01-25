@@ -152,7 +152,7 @@ if __name__ == "__main__":
                         query,
                         llm_model,
                         llm_tokenizer,
-                        response_text # FIXED: Pass the response text, not the tuple
+                        response_text
                     )
         except KeyboardInterrupt:
             print("\nExiting program.")

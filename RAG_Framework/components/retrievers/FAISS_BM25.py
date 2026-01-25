@@ -190,7 +190,6 @@ class Retriever:
         self.last_retrieved_metadata = [meta for _, meta in reranked]
 
         if use_summarization:
-            # Import here to avoid circular dependency
             from RAG_Framework.components.generators import Generator
             reranked_texts = [chunk for chunk, _ in reranked]
             final_context = Generator.summarize_passages(reranked_texts, self.llm_model, self.llm_tokenizer)
@@ -198,7 +197,6 @@ class Retriever:
             final_context = "\n---\n".join([chunk for chunk, _ in reranked])
         return final_context
 
-    # Existing semantic search tool
     def search_documents_tool(self, query: str) -> str:
         """Tool for semantic search across all documents"""
         try:
@@ -213,7 +211,6 @@ class Retriever:
         except Exception as e:
             return f"Error during search: {str(e)}"
 
-    # New metadata-based retrieval tool
     def retrieve_document_by_name_tool(self, document_name: str) -> str:
         """
         Tool for retrieving entire documents by name
@@ -264,7 +261,6 @@ class Retriever:
             import traceback
             return f"Error retrieving document '{document_name}': {str(e)}\n{traceback.format_exc()}"
 
-    # Helper tool to list available documents
     def list_available_documents_tool(self, filter_keyword: str = "") -> str:
         """Tool to list all available documents in the index, optionally filtered by keyword"""
         try:
