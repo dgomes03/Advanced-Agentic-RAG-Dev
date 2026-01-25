@@ -1,8 +1,52 @@
 import json
+import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from enum import Enum
 from mlx_lm import generate
+
+
+def parse_json_safely(response: str) -> Optional[Dict[str, Any]]:
+    """
+    Robustly parse JSON from LLM response, handling common issues:
+    - Control characters in strings
+    - Markdown code blocks
+    - Text before/after JSON
+    """
+    if not response:
+        return None
+
+    response = response.strip()
+
+    # Remove markdown code blocks
+    if '```json' in response:
+        response = response.split('```json')[1].split('```')[0].strip()
+    elif '```' in response:
+        parts = response.split('```')
+        if len(parts) >= 2:
+            response = parts[1].strip()
+
+    # Try to extract JSON object using regex (handles text before/after)
+    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+    if json_match:
+        response = json_match.group()
+
+    # Remove control characters that break JSON parsing (except valid whitespace)
+    # Replace problematic control chars with spaces
+    response = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ' ', response)
+
+    # Try parsing
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        # Try fixing common issues: unescaped newlines in strings
+        # Replace actual newlines inside strings with escaped versions
+        try:
+            # More aggressive cleanup: normalize whitespace
+            response = ' '.join(response.split())
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return None
 
 
 class ReasoningState(Enum):
@@ -100,34 +144,30 @@ class AgenticPlanner:
         
         # Parse the response
         plan = ReasoningPlan(main_query=query)
-        try:
-            # Clean response and extract JSON
-            response = response.strip()
-            if '```json' in response:
-                response = response.split('```json')[1].split('```')[0].strip()
-            elif '```' in response:
-                response = response.split('```')[1].split('```')[0].strip()
-            
-            plan_data = json.loads(response)
+
+        plan_data = parse_json_safely(response)
+
+        if plan_data and "goals" in plan_data:
             for goal_data in plan_data.get("goals", []):
-                goal = ReasoningGoal(
-                    description=goal_data["description"],
-                    priority=goal_data.get("priority", 3)
-                )
-                plan.add_goal(goal)
-            
-            print(f"\nCreated plan with {len(plan.goals)} goals:")
-            for i, g in enumerate(plan.goals, 1):
-                print(f"  {i}. [{g.priority}] {g.description}")
-                
-        except Exception as e:
-            print(f"Plan parsing failed: {e}")
+                if isinstance(goal_data, dict) and "description" in goal_data:
+                    goal = ReasoningGoal(
+                        description=goal_data["description"],
+                        priority=goal_data.get("priority", 3)
+                    )
+                    plan.add_goal(goal)
+
+            if plan.goals:
+                print(f"\nCreated plan with {len(plan.goals)} goals:")
+                for i, g in enumerate(plan.goals, 1):
+                    print(f"  {i}. [{g.priority}] {g.description}")
+            else:
+                print(f"Plan parsing failed: No valid goals found in response")
+                plan.add_goal(ReasoningGoal(description=query, priority=1))
+        else:
+            print(f"Plan parsing failed: Could not parse JSON from LLM response")
             # Fallback: treat entire query as single goal
-            plan.add_goal(ReasoningGoal(
-                description=query,
-                priority=1
-            ))
-        
+            plan.add_goal(ReasoningGoal(description=query, priority=1))
+
         return plan
     
     @staticmethod
@@ -175,26 +215,19 @@ class AgenticPlanner:
             verbose=False
         )
         
-        try:
-            # Clean and parse response
-            response = response.strip()
-            if '```json' in response:
-                response = response.split('```json')[1].split('```')[0].strip()
-            elif '```' in response:
-                response = response.split('```')[1].split('```')[0].strip()
-            
-            replan_data = json.loads(response)
-            
-            if replan_data.get("needs_replanning", False):
-                print(f"\nReplanning: {replan_data.get('reasoning', 'Adding new goals')}")
-                for goal_data in replan_data.get("new_goals", []):
+        replan_data = parse_json_safely(response)
+
+        if replan_data and replan_data.get("needs_replanning", False):
+            print(f"\nReplanning: {replan_data.get('reasoning', 'Adding new goals')}")
+            for goal_data in replan_data.get("new_goals", []):
+                if isinstance(goal_data, dict) and "description" in goal_data:
                     new_goal = ReasoningGoal(
                         description=goal_data["description"],
                         priority=goal_data.get("priority", 3)
                     )
                     plan.add_goal(new_goal)
                     print(f"  + Added: {new_goal.description}")
-        except Exception as e:
-            print(f"Replan parsing failed: {e}")
-        
+        elif replan_data is None:
+            print(f"Replan parsing failed: Could not parse JSON from LLM response")
+
         return plan

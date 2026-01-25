@@ -89,6 +89,55 @@ def get_tools_for_standard_generator():
                         "required": ["query"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_database",
+                    "description": "Execute a read-only SQL SELECT query on a configured database. Only SELECT queries are allowed. Use list_databases to see available databases and get_database_schema to understand the table structure before querying.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "db_name": {
+                                "type": "string",
+                                "description": "The name of the database to query (use list_databases to see available options)"
+                            },
+                            "sql_query": {
+                                "type": "string",
+                                "description": "The SQL SELECT query to execute. Only SELECT statements are allowed."
+                            }
+                        },
+                        "required": ["db_name", "sql_query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_databases",
+                    "description": "List all configured SQL databases available for querying.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_database_schema",
+                    "description": "Get the schema (tables and columns) of a configured database. Use this to understand the database structure before writing queries.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "db_name": {
+                                "type": "string",
+                                "description": "The name of the database to get the schema for"
+                            }
+                        },
+                        "required": ["db_name"]
+                    }
+                }
             }
         ]
 
@@ -190,6 +239,55 @@ def get_tools_for_agentic_generator():
                             "query": {"type": "string", "description": "The search query string."}
                         },
                         "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_database",
+                    "description": "Execute a read-only SQL SELECT query on a configured database. Only SELECT queries are allowed. Use list_databases to see available databases and get_database_schema to understand the table structure before querying.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "db_name": {
+                                "type": "string",
+                                "description": "The name of the database to query (use list_databases to see available options)"
+                            },
+                            "sql_query": {
+                                "type": "string",
+                                "description": "The SQL SELECT query to execute. Only SELECT statements are allowed."
+                            }
+                        },
+                        "required": ["db_name", "sql_query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_databases",
+                    "description": "List all configured SQL databases available for querying.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_database_schema",
+                    "description": "Get the schema (tables and columns) of a configured database. Use this to understand the database structure before writing queries.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "db_name": {
+                                "type": "string",
+                                "description": "The name of the database to get the schema for"
+                            }
+                        },
+                        "required": ["db_name"]
                     }
                 }
             }

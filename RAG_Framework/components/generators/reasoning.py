@@ -61,9 +61,13 @@ class AgenticGenerator:
             # Step 3: Search for information
             print(f"\nSearching for relevant information...")
             try:
-                retrieved_context = AgenticGenerator.available_tools(current_goal.description, llm_model, llm_tokenizer, retriever)
-                current_goal.retrieved_info.append(retrieved_context)
-                print(f"Retrieved {len(retrieved_context)} characters of context")
+                retrieved_context, _ = AgenticGenerator.available_tools(current_goal.description, llm_model, llm_tokenizer, retriever)
+                if retrieved_context:
+                    current_goal.retrieved_info.append(retrieved_context)
+                    print(f"Retrieved {len(retrieved_context)} characters of context")
+                else:
+                    print("No context retrieved (empty response)")
+                    retrieved_context = ""  # Ensure it's a string for downstream use
             except Exception as e:
                 print(f"Search failed: {e}")
                 current_goal.status = "failed"
@@ -319,6 +323,30 @@ class AgenticGenerator:
                             elif tool_name == "google_custom_search":
                                 query_str = tool_args.get("query", "")
                                 tool_result = Generator.google_custom_search(query_str)
+                            elif tool_name == "query_database":
+                                from RAG_Framework.components.database import get_sql_connector
+                                sql_connector = get_sql_connector()
+                                if sql_connector is None:
+                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
+                                else:
+                                    db_name = tool_args.get("db_name", "")
+                                    sql_query = tool_args.get("sql_query", "")
+                                    tool_result = sql_connector.execute_query(db_name, sql_query)
+                            elif tool_name == "list_databases":
+                                from RAG_Framework.components.database import get_sql_connector
+                                sql_connector = get_sql_connector()
+                                if sql_connector is None:
+                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
+                                else:
+                                    tool_result = sql_connector.list_databases()
+                            elif tool_name == "get_database_schema":
+                                from RAG_Framework.components.database import get_sql_connector
+                                sql_connector = get_sql_connector()
+                                if sql_connector is None:
+                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
+                                else:
+                                    db_name = tool_args.get("db_name", "")
+                                    tool_result = sql_connector.get_schema(db_name)
                             else:
                                 tool_result = f"Error: Unknown tool: {tool_name}"
 
@@ -358,6 +386,6 @@ class AgenticGenerator:
 
                 # FIXED: Return the actual response text and prompt
                 return response_text, prompt
-        # If we reach maximum iterations, return the current response
-        print(f"Fatal Error")
-        return current_response, prompt
+        # If we reach maximum iterations or break due to error, return empty response
+        print(f"Fatal Error: Tool processing loop ended unexpectedly")
+        return "", prompt

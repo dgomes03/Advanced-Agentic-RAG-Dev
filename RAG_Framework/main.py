@@ -15,7 +15,7 @@ from mlx_lm.models.cache import make_prompt_cache
 from RAG_Framework.core.config import (
     EMBEDDING_MODEL_NAME, MODEL_PATH, RERANKER_MODEL_NAME,
     ENABLE_SERVER, SERVER_HOST, SERVER_PORT, EVAL, num_threads,
-    ADVANCED_REASONING
+    ADVANCED_REASONING, ENABLE_SQL_DATABASES, SQL_DATABASE_CONFIGS
 )
 
 # Set threading limits
@@ -95,6 +95,32 @@ if __name__ == "__main__":
     print(f"Index contains {len(multi_vector_index)} chunks.")
     # Attach the prompt cache to the retriever instance for easy access if needed in server mode
     retriever.prompt_cache = prompt_cache
+
+    # Initialize SQL databases if enabled
+    if ENABLE_SQL_DATABASES and SQL_DATABASE_CONFIGS:
+        print("\nInitializing SQL databases...")
+        from RAG_Framework.components.database import initialize_sql_connector, DatabaseConfig, DatabaseType
+
+        db_configs = {}
+        for db_name, config_dict in SQL_DATABASE_CONFIGS.items():
+            try:
+                db_configs[db_name] = DatabaseConfig(
+                    db_type=DatabaseType(config_dict.get("db_type", "sqlite")),
+                    connection_string=config_dict.get("connection_string", ""),
+                    description=config_dict.get("description", ""),
+                    max_rows=config_dict.get("max_rows", 100),
+                    timeout=config_dict.get("timeout", 30),
+                    allowed_tables=config_dict.get("allowed_tables")
+                )
+                print(f"  Configured database: {db_name} ({config_dict.get('db_type', 'sqlite')})")
+            except Exception as e:
+                print(f"  Warning: Failed to configure database '{db_name}': {e}")
+
+        if db_configs:
+            initialize_sql_connector(db_configs)
+            print(f"SQL connector initialized with {len(db_configs)} database(s)")
+        else:
+            print("No valid SQL database configurations found")
 
     # Force cleanup
     import gc

@@ -1,8 +1,7 @@
-import json
 from typing import Dict, Any
 from mlx_lm import generate
 
-from RAG_Framework.agents.planner import ReasoningGoal, ReasoningPlan
+from RAG_Framework.agents.planner import ReasoningGoal, ReasoningPlan, parse_json_safely
 
 
 class AgenticEvaluator:
@@ -52,21 +51,15 @@ Is this sufficient? Output JSON only."""
             verbose=False
         )
         
-        try:
-            # Clean and parse
-            response = response.strip()
-            if '```json' in response:
-                response = response.split('```json')[1].split('```')[0].strip()
-            elif '```' in response:
-                response = response.split('```')[1].split('```')[0].strip()
-            
-            eval_result = json.loads(response)
+        eval_result = parse_json_safely(response)
+
+        if eval_result and "is_complete" in eval_result:
             return eval_result
-        except Exception as e:
-            print(f"Evaluation parsing failed: {e}")
+        else:
+            print(f"Evaluation parsing failed: Could not parse JSON from LLM response")
             # Fallback evaluation
             return {
-                "is_complete": len(retrieved_context) > 100,
+                "is_complete": len(retrieved_context) > 100 if retrieved_context else False,
                 "confidence": 0.5,
                 "missing_aspects": [],
                 "reasoning": "Fallback evaluation"
@@ -82,8 +75,16 @@ Is this sufficient? Output JSON only."""
         all_info = []
         for goal in plan.goals:
             if goal.retrieved_info:
-                all_info.extend(goal.retrieved_info)
-        
+                for info in goal.retrieved_info:
+                    # Ensure each item is a string
+                    if isinstance(info, str):
+                        all_info.append(info)
+                    elif isinstance(info, tuple):
+                        # Handle tuple case (e.g., from available_tools returning tuple)
+                        all_info.append(str(info[0]) if info else "")
+                    else:
+                        all_info.append(str(info))
+
         system_prompt = """You are a final completeness evaluator. Assess if we have enough information to answer the original query comprehensively.
 
             Output ONLY valid JSON:
@@ -93,9 +94,11 @@ Is this sufficient? Output JSON only."""
                 "coverage_assessment": "brief assessment",
                 "needs_more_search": true/false
             }"""
-        
-        # adicionar KV-Cache a isto !!!!!!!!!
-        combined_info = "\n".join(all_info[:8000])  # Limit context
+
+        # Limit to ~8000 characters total, not list items
+        combined_info = "\n".join(all_info)
+        if len(combined_info) > 8000:
+            combined_info = combined_info[:8000] + "..."
         
         user_prompt = f"""Original query: {plan.main_query}
 
@@ -125,17 +128,12 @@ Is this sufficient? Output JSON only."""
             verbose=False
         )
         
-        try:
-            response = response.strip()
-            if '```json' in response:
-                response = response.split('```json')[1].split('```')[0].strip()
-            elif '```' in response:
-                response = response.split('```')[1].split('```')[0].strip()
-            
-            eval_result = json.loads(response)
+        eval_result = parse_json_safely(response)
+
+        if eval_result and "can_answer" in eval_result:
             return eval_result
-        except Exception as e:
-            print(f"⚠️  Overall evaluation parsing failed: {e}")
+        else:
+            print(f"Overall evaluation parsing failed: Could not parse JSON from LLM response")
             return {
                 "can_answer": plan.get_completion_rate() > 0.6,
                 "overall_confidence": plan.get_completion_rate(),

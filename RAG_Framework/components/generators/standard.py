@@ -417,6 +417,30 @@ class Generator:
                             elif tool_name == "google_custom_search":
                                 query_str = tool_args.get("query", "")
                                 tool_result = Generator.google_custom_search(query_str)
+                            elif tool_name == "query_database":
+                                from RAG_Framework.components.database import get_sql_connector
+                                sql_connector = get_sql_connector()
+                                if sql_connector is None:
+                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
+                                else:
+                                    db_name = tool_args.get("db_name", "")
+                                    sql_query = tool_args.get("sql_query", "")
+                                    tool_result = sql_connector.execute_query(db_name, sql_query)
+                            elif tool_name == "list_databases":
+                                from RAG_Framework.components.database import get_sql_connector
+                                sql_connector = get_sql_connector()
+                                if sql_connector is None:
+                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
+                                else:
+                                    tool_result = sql_connector.list_databases()
+                            elif tool_name == "get_database_schema":
+                                from RAG_Framework.components.database import get_sql_connector
+                                sql_connector = get_sql_connector()
+                                if sql_connector is None:
+                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
+                                else:
+                                    db_name = tool_args.get("db_name", "")
+                                    tool_result = sql_connector.get_schema(db_name)
                             else:
                                 tool_result = f"Error: Unknown tool: {tool_name}"
 
