@@ -42,12 +42,12 @@
 % Process options
 \ProcessKeyvalOptions*
 
-\LoadClass[a4paper,12pt]{report}
+\LoadClass[a4paper,10pt]{report}
 
 % _______________ Packages _______________
 
 % Set margings and spaces
-\RequirePackage[a4paper,left=2.9cm, top=2.9cm, bottom=2.3cm, right=2.9cm,includefoot,heightrounded]{geometry}
+\RequirePackage[a4paper,left=2.5cm, top=2.5cm, bottom=2.5cm, right=2.5cm,includefoot,heightrounded]{geometry}
 
 % Customize the table of contents
 \usepackage[titles]{tocloft}
@@ -130,7 +130,6 @@
 	\newcommand{\cLizenzTemplate}[1]{Unless explicitly specified otherwise, this work is licensed under the license #1.}
 	\renewcommand{\maketitle}{%
         \englishTitle
-        \englishBacktitle
   }
   \newcommand{\declaration}{%
     \englishDeclaration
@@ -382,14 +381,14 @@
 \newenvironment{content}{
     \setlength{\parskip}{10pt}%
     \pagenumbering{arabic}
-    \newgeometry{left=2.9cm, top=2.9cm, bottom=2cm, right=2.9cm} % To avoid the header rule to end before content text width
+    \newgeometry{left=2.5cm, top=2.5cm, bottom=2.5cm, right=2.5cm} % To avoid the header rule to end before content text width
     \setcounter{page}{1}
 }{}
 
 % Define Headers and Footers for last part
 \newenvironment{backmatter}{
     \setlength{\parskip}{10pt}%
-    \newgeometry{left=2.9cm, top=2.9cm, bottom=2cm, right=2.9cm}
+    \newgeometry{left=2.5cm, top=2.5cm, bottom=2.5cm, right=2.5cm}
     \pagestyle{fancyplain}
     \fancyhf{}
     \fancyfoot[C]{\thepage}
@@ -537,85 +536,71 @@
 {\ClassError{wi}{Unknown chair ``\wi@chair'' specified}{}}
 } }}}}
 
-% English Page
+% English Page - ISA / University of Lisbon Cover
 \newcommand{\englishTitle}{
-  \newgeometry{left=2cm, top=3cm, bottom=3cm, right=2cm}
+  \newgeometry{left=2.5cm, top=2.5cm, bottom=2.5cm, right=2.5cm}
   \begin{titlepage}
     \centering
-    \vspace{0.3cm}
-    {\scshape\Large University of Lisbon}\par
-    \vspace{-3mm}
-    {\scshape\large Department of Information Systems}\par
-    \vspace{1cm}
-    {\textcolor{gray}{\rule{0.9\textwidth}{0.5mm}}}
-    \vspace*{0.5cm}
+    % University logos at the top
+    \begin{minipage}{0.45\textwidth}
+        \centering
+        \IfFileExists{settings/Logos/ULisboa_logo.png}{%
+            \includegraphics[height=2.5cm]{settings/Logos/ULisboa_logo.png}%
+        }{%
+            \framebox[3cm][c]{\parbox{2.8cm}{\centering\small ULisboa Logo\\(placeholder)}}%
+        }
+    \end{minipage}%
+    \hfill
+    \begin{minipage}{0.45\textwidth}
+        \centering
+        \IfFileExists{settings/Logos/ISA_logo.png}{%
+            \includegraphics[height=2.5cm]{settings/Logos/ISA_logo.png}%
+        }{%
+            \framebox[3cm][c]{\parbox{2.8cm}{\centering\small ISA Logo\\(placeholder)}}%
+        }
+    \end{minipage}
+
+    \vspace{0.8cm}
+    {\scshape\Large Universidade de Lisboa}\par
+    \vspace{2mm}
+    {\scshape\large Instituto Superior de Agronomia}\par
+
+    \vspace{1.5cm}
+    {\textcolor{gray}{\rule{0.9\textwidth}{0.4mm}}}
+    \vspace*{0.6cm}
+
+    % Title
     \begin{center}
         \begin{minipage}{0.9\textwidth}
             \begin{center}
-                {\LARGE\parindent0pt
-                \begin{spacing}{1.13}
+                {\LARGE\bfseries\parindent0pt
+                \begin{spacing}{1.2}
                     \@title
                 \end{spacing}}\par
             \end{center}
         \end{minipage}
     \end{center}
-    \vspace*{-0.3cm}
-    {\textcolor{gray}{\rule{0.9\textwidth}{0.5mm}}}\par
+    \vspace*{0.3cm}
+    {\textcolor{gray}{\rule{0.9\textwidth}{0.4mm}}}\par
+
+    \vspace{1.2cm}
+    {\Large Dissertation}\par
+    \vspace{0.3cm}
+    {\normalsize to obtain the degree of Master in}\par
+    \vspace{0.3cm}
+    {\large\textsc{Data Science in Agriculture, Food, Forest and Environment}}\par
+
     \vspace{1.5cm}
-    \begin{center}
-        \begin{minipage}{0.9\textwidth}
-            \begin{center}
-                \@thesistype
-            \end{center}
-        \end{minipage}
-    \end{center}
-    \vspace{0.4cm}
-    {submitted by}\par
-    \vspace{0.4cm}
-    {\LARGE{\@author}}\par
-    \vspace{-0.5cm}
-    \ifthenelse{\equal{\wi@chair}{csssa}}{
-        \vfill
-        \begin{figure}[b!]
-            \centering
-            \includegraphics[width=4.5cm]{settings/Logos/LS_logo.png}
-        \end{figure}
-    }
-    {\ifthenelse{\equal{\wi@chair}{machineLearning}}{
-        \vfill
-        \begin{minipage}{0.7\textwidth}
-            \centering
-            \large{\textsc{Machine Learning and Data Engineering}}
-        \end{minipage}
-    }
-    {\ifthenelse{\equal{\wi@chair}{datascience}}{
-        \vfill
-        \begin{minipage}{\textwidth}
-            \centering
-            \large{\textsc{Chairs of Data Science: \\
-            Computational Social Science and Systems Analysis \& \\
-            Machine Learning and Data Engineering}}
-        \end{minipage}
-    }
-    {\ifthenelse{\equal{\wi@chair}{dips}}{
-        \vfill
-        \begin{figure}[b!]
-            \centering
-            \includegraphics[width=6.5cm]{settings/Logos/DIPS_ext.png}
-        \end{figure}
-    }
-    {\ifthenelse{\equal{\wi@chair}{bpm}}{
-        \vfill
-        \begin{figure}[b!]
-            \centering
-            \includegraphics[width=6.5cm]{settings/Logos/ERCIS_logo_color.png}
-        \end{figure}
-    }
-    { \ClassError{wi}{Unknown chair ``\wi@chair'' specified}{}}
-    }
-    }
-    }
-    }
+    {\large\@author}\par
+    \vspace{0.2cm}
+    {\normalsize Student n\textsuperscript{o} \@id}\par
+
+    \vspace{1.2cm}
+    {\normalsize\textbf{Supervisor:} \@supervisor}\par
+
+    \vfill
+    {\large \@date}\par
+    \vspace{0.5cm}
   \end{titlepage}
   \restoregeometry{}
 }

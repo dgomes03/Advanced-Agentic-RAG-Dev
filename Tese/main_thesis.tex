@@ -3,7 +3,6 @@
     thesis=master, % seminar bachelor master
     chair=datascience, % csssa machineLearning datascience dips bpm
     supervisor=supervisor, % supervisor postdoc
-    license=cc-by-sa, % cc0 cc-by cc-by-sa [or keep it empty, i.e. "license=," ]
     multiauthor=false, % true false
     ]{settings/wi-thesis}
 
@@ -11,42 +10,15 @@
 \title{An Efficient and Modular Framework for Advanced Agentic Retrieval-Augmented Generation}
 
 \author{Diogo Henrique Martins Gomes}
-%\author{Maja Mustermann, Max Musterfrau}
-%\author{First Middle Last Name\\Second Student with somewhat longer Name}
 
-% Note that underscore needs to be escaped in LaTeX:
-\email{student\_01@uni-muenster.de}
-%\email{\{student1,student2\}@uni-muenster.de}
+% Student Number
+\id{26843}
 
-% Matriculation Number
-\id{123456}
-%\id{123456, 234567}
+% Supervisor
+\supervisor{Manuel Campagnolo}
 
-% Field of Study
-\field{Information Systems}
-
-% Address, for declarations at the end of the thesis.
-\city{M\"unster}
-% Note that the umlaut is transcribed here.  You can also use umlauts
-% directly.
-% Also note that quotation marks have a special meaning in LaTeX.  If
-% you quote text, make sure to use proper, language-specific opening
-% and closing quotation marks.  A content section of this template
-% contains examples.
-
-% Information about the thesis and the course
-
-% If you write a thesis which is supervised by both chairs of Data Science (=> You selected "chair=datascience" in the document definition), then you can include the second professor by adding a comma and the name of the second professor
-
-\professor{Prof. Dr. Albert Einstein}
-
-\supervisor{Supervisor, M.Sc.}
-
-% You only have to include the course if you are writing a seminar thesis
-\course{Name of the Seminar}
-
-% Submission Date
-\date{31.01.2023}
+% Year of completion
+\date{2026}
 
 
 % Add bibliography
@@ -66,23 +38,19 @@
 
     \maketitle
 
-    % Uncomment the following part if you need an abstract
-    % \begin{abstract}
-    %   \input{content/00-abstract}
-    % \end{abstract}
-
-    % Confidentiality Statement: Only add this if you write your thesis together with a company and your thesis contains sensitive or confidential Information. You can also include your own confidentiality statement.
-    % \confidential{<your company>}
-
     \tableofcontents
 
-    % In this template, lists of figures, tables, abbreviations etc. are not required. Don't add them, only if your supervisor explicitly demands them. In this case, include them after this comment
+    % List of Figures and Tables
+    \listoffigures
+    \listoftables
 
 	% Add content files via the \input{...} -command.
 	% Put the files in the "content" folder.
 	\begin{content}
 		\input{content/00-Acknowledgements}
-		\input{content/01-Abstract}
+		\input{content/01-Resumo}           % Portuguese summary (up to 300 words + 5 keywords)
+		\input{content/02-Abstract}         % English summary (up to 300 words + 5 keywords)
+		\input{content/03-ResumoAlargado}   % Extended Portuguese summary (1200-1500 words)
     	\input{content/01-introduction}
     	\input{content/02-chapter1}
         \input{content/03-chapter2}
@@ -104,9 +72,6 @@
             title={Bibliography}
         ]
         \endgroup
-        % Declarations & Consent Forms
-        \declaration
-        \consent
     \end{backmatter}
 
 % ============================================================

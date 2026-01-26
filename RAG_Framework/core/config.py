@@ -30,7 +30,7 @@ EVAL = False
 
 
 # === Server Configuration ===
-ENABLE_SERVER = True
+ENABLE_SERVER = False
 SERVER_HOST = 'localhost'
 SERVER_PORT = 5050
 
@@ -38,9 +38,6 @@ SERVER_PORT = 5050
 ADVANCED_REASONING = False
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
-
-# === Cache Configuration ===
-ENABLE_SELECTIVE_CACHING = True  # Exclude tool results from KV cache to reduce RAM usage
 
 # === Google Custom Search Configuration ===
 GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"

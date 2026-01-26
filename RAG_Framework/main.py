@@ -27,6 +27,7 @@ faiss.omp_set_num_threads(int(num_threads))
 from RAG_Framework.components.indexer import Indexer
 from RAG_Framework.components.retrievers import Retriever
 from RAG_Framework.components.generators import Generator
+from RAG_Framework.core.conversation_manager import ConversationManager
 
 # Global RAG system for server mode
 rag_system = None
@@ -54,6 +55,7 @@ if __name__ == "__main__":
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
         llm_model, llm_tokenizer = load(MODEL_PATH) # por adapter path aqui
         prompt_cache = make_prompt_cache(llm_model)
+        conversation_manager = ConversationManager()
         reranker = CrossEncoder(RERANKER_MODEL_NAME)
 
         print("\nGenerating embeddings...")
@@ -79,6 +81,7 @@ if __name__ == "__main__":
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
         llm_model, llm_tokenizer = load(MODEL_PATH) # por adapter path aqui
         prompt_cache = make_prompt_cache(llm_model)
+        conversation_manager = ConversationManager()
         reranker = CrossEncoder(RERANKER_MODEL_NAME)
 
     print("\nCreating Retriever...")
@@ -93,8 +96,9 @@ if __name__ == "__main__":
         reranker
     )
     print(f"Index contains {len(multi_vector_index)} chunks.")
-    # Attach the prompt cache to the retriever instance for easy access if needed in server mode
+    # Attach the prompt cache and conversation manager to the retriever for easy access in server mode
     retriever.prompt_cache = prompt_cache
+    retriever.conversation_manager = conversation_manager
 
     # Initialize SQL databases if enabled
     if ENABLE_SQL_DATABASES and SQL_DATABASE_CONFIGS:
@@ -144,6 +148,12 @@ if __name__ == "__main__":
                 query = input("\nEnter your query: ")
                 if query.lower() == "exit":
                     break
+                if query.lower() == "clear":
+                    conversation_manager.clear()
+                    prompt_cache = make_prompt_cache(llm_model)
+                    retriever.prompt_cache = prompt_cache
+                    print("Conversation and cache cleared.")
+                    continue
 
                 # Use the appropriate generator based on ADVANCED_REASONING
                 if ADVANCED_REASONING:
@@ -152,7 +162,8 @@ if __name__ == "__main__":
                         llm_model,
                         llm_tokenizer,
                         retriever,
-                        prompt_cache
+                        prompt_cache,
+                        conversation_manager
                     )
                 else:
                     rag_response = Generator.answer_query_with_llm(
@@ -160,7 +171,8 @@ if __name__ == "__main__":
                         llm_model,
                         llm_tokenizer,
                         retriever,
-                        prompt_cache
+                        prompt_cache,
+                        conversation_manager=conversation_manager
                     )
 
                 # Ensure rag_response_tuple is a tuple before unpacking

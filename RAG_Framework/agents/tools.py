@@ -16,7 +16,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "search_documents",
-                    "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
+                    "description": "Searches user's documents for text chunks relevant to the user's query.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -115,7 +115,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "list_databases",
-                    "description": "List all configured SQL databases available for querying.",
+                    "description": "List all SQL databases available for querying.",
                     "parameters": {
                         "type": "object",
                         "properties": {}
@@ -126,7 +126,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "get_database_schema",
-                    "description": "Get the schema (tables and columns) of a configured database. Use this to understand the database structure before writing queries.",
+                    "description": "Get the schema (tables and columns) of a database. Use this to understand the database structure before writing queries.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -168,7 +168,7 @@ def get_tools_for_agentic_generator():
                 "type": "function",
                 "function": {
                     "name": "search_documents",
-                    "description": "Search for documents relevant to the user's query. Use for general questions or when you need to find information across all documents.",
+                    "description": "Searches user's documents for text chunks relevant to the user's query.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -267,7 +267,7 @@ def get_tools_for_agentic_generator():
                 "type": "function",
                 "function": {
                     "name": "list_databases",
-                    "description": "List all configured SQL databases available for querying.",
+                    "description": "List all SQL databases available for querying.",
                     "parameters": {
                         "type": "object",
                         "properties": {}
@@ -278,7 +278,7 @@ def get_tools_for_agentic_generator():
                 "type": "function",
                 "function": {
                     "name": "get_database_schema",
-                    "description": "Get the schema (tables and columns) of a configured database. Use this to understand the database structure before writing queries.",
+                    "description": "Get the schema (tables and columns) of a database. Use this to understand the database structure before writing queries.",
                     "parameters": {
                         "type": "object",
                         "properties": {

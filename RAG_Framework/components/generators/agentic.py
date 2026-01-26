@@ -1,0 +1,1 @@
+# aqui estara o generator com batch generation para ter agents.

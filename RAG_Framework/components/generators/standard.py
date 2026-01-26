@@ -6,8 +6,9 @@ import io
 from mlx_lm import generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 
-from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, GOOGLE_CX, GOOGLE_API_KEY, ENABLE_SELECTIVE_CACHING
+from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, GOOGLE_CX, GOOGLE_API_KEY
 from RAG_Framework.core.cache_manager import CacheManager
+from RAG_Framework.core.conversation_manager import ConversationManager
 
 
 class Generator:
@@ -220,7 +221,7 @@ class Generator:
             return f"Error performing Google Search: {str(e)}"
 
     @staticmethod
-    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None, verbose=True):
+    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None, verbose=True, conversation_manager=None):
 
         if ADVANCED_REASONING:
             from RAG_Framework.components.generators import AgenticGenerator
@@ -233,24 +234,16 @@ class Generator:
         logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
         current_response = None
 
-        # Selective caching: track checkpoint before tool results are added
-        pre_tool_checkpoint = None
+        # Use provided conversation manager or create a temporary one (backwards compatible)
+        if conversation_manager is None:
+            conversation_manager = ConversationManager()
 
-        # Enhanced system prompt to guide tool selection
-        conversation = [
-            {"role": "system", "content": "You are a helpful assistant with document search and Internet search capabilities. "
-            "Decide whether you need tools. If you use tools, answer based *only* on the provided results. "
-            "If you're not sure if the user wants you to access tools, ask the user. "
-            "After receiving tool results, provide a final answer. "
-            "If not enough information is found after tool calling, alert the user that there's no available information to answer the user. "
-            "At the end of an informative response, ask if the user needs more information or wants to explore more a certain fact. "
-            "The current year is 2026."
-            "**Do not make sequential tool calls**!"}
-        ]
+        # Add current query to persistent conversation
+        conversation_manager.add_user_message(query)
 
-        # Add current query
-        conversation.append({"role": "user", "content": query})
-        
+        # Get the conversation for use in the loop
+        conversation = conversation_manager.get_conversation()
+
         while True:
             prompt = llm_tokenizer.apply_chat_template(
                 conversation,
@@ -262,10 +255,26 @@ class Generator:
             print("\nFORMATTED PROMPT:")
             print(prompt)
 
-            response = Generator._generate_with_streaming( # isto é okay. em caso de n ser servidor ele so devolve oq esta em baixo.
+            # Tokenize full prompt (chat template already has special tokens)
+            full_tokens = llm_tokenizer.encode(prompt, add_special_tokens=False)
+
+            # Get current cache size (tokens already processed)
+            cache_offset = prompt_cache[0].offset if prompt_cache and len(prompt_cache) > 0 else 0
+
+            # Only pass NEW tokens if cache has content
+            if cache_offset > 0 and cache_offset < len(full_tokens):
+                # Pass only the suffix tokens that aren't cached
+                prompt_tokens = full_tokens[cache_offset:]
+                print(f"[KV-Cache] Reusing {cache_offset} cached tokens, processing {len(prompt_tokens)} new tokens")
+            else:
+                prompt_tokens = full_tokens
+                if cache_offset > 0:
+                    print(f"[KV-Cache] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), processing full prompt")
+
+            response = Generator._generate_with_streaming(
                 model=llm_model,
                 tokenizer=llm_tokenizer,
-                prompt=prompt,
+                prompt=prompt_tokens,  # Pass tokens, not string
                 max_tokens=MAX_RESPONSE_TOKENS,
                 sampler=sampler,
                 logits_processors=logits_processors,
@@ -279,11 +288,6 @@ class Generator:
             # tool call present?
             if "[TOOL_CALLS]" in response_text:
                 print(f"\nModel requested to use tools. Processing tool calls...")
-
-                # Save cache checkpoint BEFORE processing tool results (selective caching)
-                if ENABLE_SELECTIVE_CACHING and prompt_cache is not None:
-                    pre_tool_checkpoint = CacheManager.get_checkpoint(prompt_cache)
-                    CacheManager.log_cache_stats(prompt_cache, "Pre-tool checkpoint saved")
                 try:
                     tool_calls = []
                     
@@ -480,12 +484,12 @@ class Generator:
                 # No tool calls needed, return the response
                 print("No tool calls detected, returning response")
 
-                # Restore cache checkpoint to exclude tool results (selective caching)
-                if ENABLE_SELECTIVE_CACHING and pre_tool_checkpoint is not None:
-                    CacheManager.log_cache_stats(prompt_cache, "Before cache restore")
-                    CacheManager.restore_checkpoint(prompt_cache, pre_tool_checkpoint)
-                    CacheManager.log_cache_stats(prompt_cache, "After cache restore (tool results excluded)")
-                    pre_tool_checkpoint = None  # Reset for next query
+                # Add assistant response to conversation history for multi-turn caching
+                conversation_manager.add_assistant_message(response_text)
+
+                # Log cache stats for verification
+                if prompt_cache is not None:
+                    CacheManager.log_cache_stats(prompt_cache, f"After query (turn {conversation_manager.get_turn_count()})")
 
                 return response_text, prompt
 
