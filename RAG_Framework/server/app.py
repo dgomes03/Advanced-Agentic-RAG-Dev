@@ -200,8 +200,9 @@ def create_app(retriever, host='localhost', port=5050):
                 response_text = response
 
             # Emit completion
-            emit('done', {'message_id': message_id})
-            print(f"Query processed successfully. Message ID: {message_id}")
+            print(f"\nresponse")
+            emit('\ndone', {'message_id': message_id})
+            print(f"\nQuery processed successfully. Message ID: {message_id}")
 
         except Exception as e:
             # Emit error to client

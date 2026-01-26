@@ -19,7 +19,7 @@ class Generator:
         Captures verbose output from MLX generate() and emits tokens as they're generated.
         """
         if stream_callback is None:
-            # No streaming, use regular generate!!!!!
+            # TODO: i dont like this too much. another approach needs to be done.
             return generate(
                 model=model,
                 tokenizer=tokenizer,
@@ -230,11 +230,10 @@ class Generator:
         tools = get_tools_for_standard_generator()
 
         # Temperature and top sampling
-        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
+        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9) # TODO: should i just leave the default values here? 
         logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
         current_response = None
 
-        # Use provided conversation manager or create a temporary one (backwards compatible)
         if conversation_manager is None:
             conversation_manager = ConversationManager()
 
@@ -255,26 +254,26 @@ class Generator:
             print("\nFORMATTED PROMPT:")
             print(prompt)
 
-            # Tokenize full prompt (chat template already has special tokens)
+            # Tokenize full prompt
             full_tokens = llm_tokenizer.encode(prompt, add_special_tokens=False)
 
-            # Get current cache size (tokens already processed)
+            # Get current cache size
             cache_offset = prompt_cache[0].offset if prompt_cache and len(prompt_cache) > 0 else 0
 
             # Only pass NEW tokens if cache has content
             if cache_offset > 0 and cache_offset < len(full_tokens):
                 # Pass only the suffix tokens that aren't cached
                 prompt_tokens = full_tokens[cache_offset:]
-                print(f"[KV-Cache] Reusing {cache_offset} cached tokens, processing {len(prompt_tokens)} new tokens")
+                #print(f"[KV-Cache] Reusing {cache_offset} cached tokens, processing {len(prompt_tokens)} new tokens")
             else:
                 prompt_tokens = full_tokens
                 if cache_offset > 0:
-                    print(f"[KV-Cache] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), processing full prompt")
+                    print(f"\n[KV-Cache] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), processing full prompt")
 
             response = Generator._generate_with_streaming(
                 model=llm_model,
                 tokenizer=llm_tokenizer,
-                prompt=prompt_tokens,  # Pass tokens, not string
+                prompt=prompt_tokens,
                 max_tokens=MAX_RESPONSE_TOKENS,
                 sampler=sampler,
                 logits_processors=logits_processors,
