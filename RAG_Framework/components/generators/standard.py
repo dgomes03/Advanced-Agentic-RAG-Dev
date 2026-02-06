@@ -221,6 +221,64 @@ class Generator:
             return f"Error performing Google Search: {str(e)}"
 
     @staticmethod
+    def duckduckgo_search(query: str, max_results: int = 5) -> dict:
+        """Search DuckDuckGo (free, no API key required)."""
+        try:
+            # Try the newer ddgs package first, fallback to duckduckgo_search
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
+
+            results = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=max_results):
+                    results.append({
+                        'title': r.get('title', ''),
+                        'url': r.get('href', ''),
+                        'snippet': r.get('body', '')
+                    })
+
+            return {'query': query, 'results': results, 'total_results': len(results)}
+        except Exception as e:
+            return {'error': str(e), 'query': query}
+
+    @staticmethod
+    def fetch_url_content(url: str, max_chars: int = 5000) -> dict:
+        """Fetch and extract main text content from a URL."""
+        try:
+            import urllib.request
+            import urllib.parse
+            import re
+
+            # Validate URL
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ['http', 'https']:
+                return {'error': 'Invalid URL scheme', 'url': url}
+
+            headers = {'User-Agent': 'Mozilla/5.0 (compatible; RAGBot/1.0)'}
+            request = urllib.request.Request(url, headers=headers)
+
+            with urllib.request.urlopen(request, timeout=15) as response:
+                html = response.read().decode('utf-8', errors='ignore')
+
+            # Strip scripts, styles, nav, header, footer
+            html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL|re.I)
+            html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL|re.I)
+            html = re.sub(r'<(nav|header|footer)[^>]*>.*?</\1>', '', html, flags=re.DOTALL|re.I)
+
+            # Extract text
+            text = re.sub(r'<[^>]+>', ' ', html)
+            text = re.sub(r'\s+', ' ', text).strip()
+
+            if len(text) > max_chars:
+                text = text[:max_chars] + '...'
+
+            return {'url': url, 'content': text, 'char_count': len(text), 'success': True}
+        except Exception as e:
+            return {'error': str(e), 'url': url}
+
+    @staticmethod
     def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None, verbose=True, conversation_manager=None):
 
         if ADVANCED_REASONING:
@@ -425,6 +483,14 @@ class Generator:
                             elif tool_name == "google_custom_search":
                                 query_str = tool_args.get("query", "")
                                 tool_result = Generator.google_custom_search(query_str)
+                            elif tool_name == "duckduckgo_search":
+                                query_str = tool_args.get("query", "")
+                                max_results = tool_args.get("max_results", 5)
+                                tool_result = Generator.duckduckgo_search(query_str, max_results)
+                            elif tool_name == "fetch_url_content":
+                                url = tool_args.get("url", "")
+                                max_chars = tool_args.get("max_chars", 5000)
+                                tool_result = Generator.fetch_url_content(url, max_chars)
                             elif tool_name == "query_database":
                                 from RAG_Framework.components.database import get_sql_connector
                                 sql_connector = get_sql_connector()

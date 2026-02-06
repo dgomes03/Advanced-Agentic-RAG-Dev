@@ -6,6 +6,8 @@ that the cache can prefix-match against, rather than rebuilding from scratch
 each query.
 """
 
+from datetime import datetime
+
 
 class ConversationManager:
     """Manages persistent conversation history for multi-turn chat."""
@@ -17,7 +19,6 @@ class ConversationManager:
         "If insufficient information is found, inform the user.\n"
         "End informative responses by offering to elaborate.\n"
         "When searching google, cite your sources.\n"
-        "Current year: 2026.\n"
         "When multiple tools are necessary, use one at a time.\n"
         "After each tool call, analyze its results and respond to the user before proceeding.\n\n"
         """The name of the user is Diogo.
@@ -43,7 +44,10 @@ class ConversationManager:
         Args:
             system_prompt: Optional custom system prompt. Uses default if None.
         """
-        self._system_prompt = system_prompt or self.SYSTEM_PROMPT
+        base_prompt = system_prompt or self.SYSTEM_PROMPT
+        # Inject current date/time at the start of system prompt
+        current_datetime = datetime.now().strftime("%A, %B %d, %Y at %H:%M")
+        self._system_prompt = f"Current date and time: {current_datetime}\n\n{base_prompt}"
         self.conversation = [{"role": "system", "content": self._system_prompt}]
 
     def add_user_message(self, content: str):

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
     <title>Intelligence</title>
 
     <!-- marked.js for Markdown rendering -->
@@ -66,6 +66,11 @@
             padding: 0;
         }
 
+        html {
+            height: 100%;
+            height: -webkit-fill-available;
+        }
+
         body {
             font-family: var(--font-system);
             background: var(--color-bg);
@@ -74,12 +79,17 @@
             font-size: 15px;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
+            height: 100%;
+            height: -webkit-fill-available;
+            overflow: hidden;
         }
 
         /* ===== Layout ===== */
 
         .app-container {
             height: 100vh;
+            height: 100dvh; /* Dynamic viewport height for mobile */
+            height: -webkit-fill-available; /* iOS Safari fallback */
             width: 100vw;
             display: flex;
             flex-direction: row;
@@ -167,7 +177,7 @@
             background: var(--color-accent);
             color: white;
             border: none;
-            border-radius: var(--radius-sm);
+            border-radius: 22px;
             font-size: 13px;
             font-weight: 500;
             cursor: pointer;
@@ -310,8 +320,9 @@
             flex: 1;
             display: flex;
             flex-direction: column;
-            height: 100vh;
+            height: 100%;
             min-width: 0;
+            overflow: hidden;
         }
 
         /* Sidebar toggle button */
@@ -1080,6 +1091,8 @@
             display: flex;
             gap: var(--spacing-sm);
             align-items: flex-end;
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
         }
 
         .input {
@@ -1179,6 +1192,7 @@
 
             .input-area {
                 padding: var(--spacing-md);
+                padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom));
             }
 
             .welcome-title {
@@ -1187,6 +1201,17 @@
 
             .welcome-subtitle {
                 font-size: 15px;
+            }
+        }
+
+        /* iOS-specific fixes */
+        @supports (-webkit-touch-callout: none) {
+            .app-container {
+                height: -webkit-fill-available;
+            }
+
+            .input-area {
+                padding-bottom: max(var(--spacing-lg), env(safe-area-inset-bottom));
             }
         }
 
@@ -1260,12 +1285,7 @@
                 <div class="messages" id="messages">
                     <!-- Welcome message -->
                     <div class="welcome">
-                        <div class="welcome-icon">
-                            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-                                <rect width="64" height="64" rx="16" fill="currentColor" opacity="0.06"/>
-                                <path d="M32 20v24M20 32h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
-                            </svg>
-                        </div>
+
                         <h1 class="welcome-title">Ask anything</h1>
                         <p class="welcome-subtitle">Search through documents, retrieve information online, and use Advanced Reasoning for complex tasks</p>
                         <div class="capabilities">

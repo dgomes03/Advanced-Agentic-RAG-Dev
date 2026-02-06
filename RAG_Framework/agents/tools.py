@@ -93,6 +93,36 @@ def get_tools_for_standard_generator():
             {
                 "type": "function",
                 "function": {
+                    "name": "duckduckgo_search",
+                    "description": "Search the web using DuckDuckGo. Returns titles, snippets, and URLs. Use fetch_url_content to get full page content from promising results.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query"},
+                            "max_results": {"type": "integer", "description": "Max results (default 5)", "default": 5}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fetch_url_content",
+                    "description": "Fetch and extract the main text content from a web page. Use after duckduckgo_search or google_custom_search to get full article content instead of just snippets.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "The full URL to fetch"},
+                            "max_chars": {"type": "integer", "description": "Max characters to return (default 5000)", "default": 5000}
+                        },
+                        "required": ["url"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "query_database",
                     "description": "Execute a read-only SQL SELECT query on a configured database. Only SELECT queries are allowed. Use list_databases to see available databases and get_database_schema to understand the table structure before querying.",
                     "parameters": {
@@ -239,6 +269,36 @@ def get_tools_for_agentic_generator():
                             "query": {"type": "string", "description": "The search query string."}
                         },
                         "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "duckduckgo_search",
+                    "description": "Search the web using DuckDuckGo. Returns titles, snippets, and URLs. Use fetch_url_content to get full page content from promising results.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query"},
+                            "max_results": {"type": "integer", "description": "Max results (default 5)", "default": 5}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fetch_url_content",
+                    "description": "Fetch and extract the main text content from a web page. Use after duckduckgo_search or google_custom_search to get full article content instead of just snippets.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "The full URL to fetch"},
+                            "max_chars": {"type": "integer", "description": "Max characters to return (default 5000)", "default": 5000}
+                        },
+                        "required": ["url"]
                     }
                 }
             },
