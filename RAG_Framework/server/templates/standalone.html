@@ -111,14 +111,21 @@
             width: var(--sidebar-width);
             min-width: 200px;
             max-width: 500px;
-            height: 100%;
-            background: var(--color-surface);
-            border-right: 1px solid var(--color-border);
+            height: calc(100% - 24px);
+            margin: 12px;
+            margin-right: 0;
+            background: rgba(255, 253, 249, 0.85);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border: 1px solid rgba(210, 210, 215, 0.4);
+            border-radius: var(--radius-lg);
             display: flex;
             flex-direction: column;
             flex-shrink: 0;
             z-index: 200;
             position: relative;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04), 0 1px 4px rgba(0, 0, 0, 0.02);
+            overflow: hidden;
         }
 
         /* Resize handle */
@@ -161,7 +168,7 @@
 
         .sidebar-header {
             padding: var(--spacing-md);
-            border-bottom: 1px solid var(--color-border);
+            border-bottom: 1px solid rgba(210, 210, 215, 0.3);
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -169,7 +176,7 @@
         }
 
         .sidebar-title {
-            font-size: 14px;
+            font-size: 18px;
             font-weight: 600;
             color: var(--color-text);
         }
@@ -177,9 +184,9 @@
         .sidebar-new-btn {
             display: flex;
             align-items: center;
-            gap: var(--spacing-sm);
-            padding: var(--spacing-sm) var(--spacing-md);
-            background: var(--color-accent);
+            gap: 6px;
+            padding: 6px 14px;
+            background: var(--color-text);
             color: white;
             border: none;
             border-radius: 22px;
@@ -190,7 +197,7 @@
         }
 
         .sidebar-new-btn:hover {
-            background: var(--color-accent-hover);
+            opacity: 0.85;
             transform: scale(1.02);
         }
 
@@ -200,15 +207,15 @@
 
         .sidebar-search {
             padding: var(--spacing-sm) var(--spacing-md);
-            border-bottom: 1px solid var(--color-border);
+            border-bottom: 1px solid rgba(210, 210, 215, 0.3);
         }
 
         .sidebar-search-input {
             width: 100%;
             padding: var(--spacing-sm) var(--spacing-md);
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius-sm);
-            background: var(--color-bg);
+            border: 1px solid rgba(210, 210, 215, 0.4);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.6);
             font-size: 13px;
             color: var(--color-text);
             outline: none;
@@ -244,20 +251,20 @@
 
         .conversation-item {
             padding: var(--spacing-sm) var(--spacing-md);
-            border-radius: var(--radius-sm);
+            border-radius: var(--radius-md);
             cursor: pointer;
-            margin-bottom: var(--spacing-xs);
+            margin-bottom: 2px;
             transition: all 0.15s ease;
             position: relative;
         }
 
         .conversation-item:hover {
-            background: var(--color-bg);
+            background: rgba(255, 255, 255, 0.6);
         }
 
         .conversation-item.active {
-            background: var(--color-bg);
-            box-shadow: var(--shadow-sm);
+            background: rgba(255, 255, 255, 0.7);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
         }
 
         .conversation-title {
@@ -315,7 +322,7 @@
         .conversations-empty {
             text-align: center;
             padding: var(--spacing-xl);
-            color: var(--color-text-secondary);
+            color: #b5ada5;
             font-size: 13px;
         }
 
@@ -328,6 +335,7 @@
             height: 100%;
             min-width: 0;
             overflow: hidden;
+            position: relative;
         }
 
         /* Sidebar toggle button */
@@ -376,8 +384,11 @@
                 top: 0;
                 bottom: 0;
                 width: 280px !important;
+                height: 100%;
+                margin: 0;
+                border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
                 transform: translateX(-100%);
-                box-shadow: var(--shadow-md);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
             }
 
             .sidebar.open {
@@ -504,7 +515,7 @@
 
         .messages-wrapper {
             min-height: 100%;
-            padding: var(--spacing-2xl) var(--spacing-xl) var(--spacing-xl);
+            padding: var(--spacing-2xl) var(--spacing-xl) 100px;
         }
 
         .messages {
@@ -559,45 +570,55 @@
         }
 
         .welcome-title {
-            font-size: 48px;
-            font-family: Georgia, 'Times New Roman', Times, serif;
-            font-weight: 800;
-            letter-spacing: -0.02em;
+            font-size: 44px;
+            font-family: var(--font-system);
+            font-weight: 700;
+            letter-spacing: -0.03em;
             margin-bottom: var(--spacing-sm);
             color: var(--color-text);
         }
 
         .welcome-subtitle {
-            font-size: 16px;
+            font-size: 15px;
             color: var(--color-text-secondary);
-            max-width: 480px;
+            max-width: 440px;
             margin: 0 auto var(--spacing-xl);
-            line-height: 1.5;
+            line-height: 1.6;
         }
 
         .capabilities {
             display: flex;
             flex-wrap: wrap;
-            gap: var(--spacing-sm);
+            gap: 10px;
             justify-content: center;
             margin-top: var(--spacing-xl);
+            max-width: 520px;
+            margin-left: auto;
+            margin-right: auto;
         }
 
         .capability {
             display: inline-flex;
             align-items: center;
             gap: var(--spacing-sm);
-            padding: var(--spacing-sm) var(--spacing-md);
-            background: var(--color-surface);
+            padding: 8px 16px;
+            background: rgba(255, 251, 242, 0.7);
+            border: 1px solid rgba(210, 200, 180, 0.35);
             border-radius: var(--radius-full);
-            font-size: 14px;
-            color: var(--color-text-secondary);
+            font-size: 13px;
+            color: #6b6560;
             font-weight: 500;
             transition: all 0.2s ease;
         }
 
+        .capability:hover {
+            background: rgba(255, 248, 235, 0.9);
+            border-color: rgba(200, 185, 160, 0.5);
+            color: #4a4540;
+        }
+
         .capability-icon {
-            color: var(--color-text-secondary);
+            color: #9b9285;
             display: flex;
             align-items: center;
         }
@@ -1111,12 +1132,14 @@
         /* ===== Input Area ===== */
 
         .input-area {
-            background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: saturate(180%) blur(20px);
-            -webkit-backdrop-filter: saturate(180%) blur(20px);
-            border-top: 1px solid var(--color-border);
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
             padding: var(--spacing-lg);
-            flex-shrink: 0;
+            background: none;
+            z-index: 50;
+            pointer-events: none;
         }
 
         .input-container {
@@ -1127,12 +1150,15 @@
             align-items: flex-end;
             padding-left: env(safe-area-inset-left);
             padding-right: env(safe-area-inset-right);
+            pointer-events: auto;
         }
 
         .input {
             flex: 1;
             border: 1px solid var(--color-border);
-            background: var(--color-bg);
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
             font-family: var(--font-system);
             font-size: 15px;
             color: var(--color-text);
@@ -1148,6 +1174,7 @@
         .input:focus {
             border-color: var(--color-accent);
             box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+            background: rgba(255, 255, 255, 0.8);
         }
 
         .input::placeholder {
@@ -1221,20 +1248,21 @@
             }
 
             .messages-wrapper {
-                padding: var(--spacing-lg) var(--spacing-md) var(--spacing-md);
+                padding: var(--spacing-lg) var(--spacing-md) 120px;
             }
 
             .input-area {
                 padding: var(--spacing-md);
+                padding-top: var(--spacing-lg);
                 padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom));
             }
 
             .welcome-title {
-                font-size: 28px;
+                font-size: 30px;
             }
 
             .welcome-subtitle {
-                font-size: 15px;
+                font-size: 14px;
             }
         }
 
@@ -1246,6 +1274,7 @@
 
             .input-area {
                 padding-bottom: max(var(--spacing-lg), env(safe-area-inset-bottom));
+                padding-top: var(--spacing-xl);
             }
         }
 
@@ -1319,12 +1348,12 @@
                 <div class="messages" id="messages">
                     <!-- Welcome message -->
                     <div class="welcome">
-                        <h1 class="welcome-title">Ask anything</h1>
-                        <p class="welcome-subtitle">Search through documents, retrieve information online, and use Advanced Reasoning for complex tasks</p>
+                        <h1 class="welcome-title">What can I help with?</h1>
+                        <p class="welcome-subtitle">Search your documents, browse the web, query databases, and reason through complex problems.</p>
                         <div class="capabilities">
                             <div class="capability">
                                 <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                                         <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
                                         <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
@@ -1333,39 +1362,48 @@
                             </div>
                             <div class="capability">
                                 <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                                         <path d="M5 3h10a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
                                         <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
                                 </div>
-                                <span>Document retrieval</span>
+                                <span>Document Retrieval</span>
                             </div>
                             <div class="capability">
                                 <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                                        <circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M6 10h8M10 6v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
                                 </div>
-                                <span>Wikipedia Search</span>
+                                <span>Web Search</span>
                             </div>
                             <div class="capability">
                                 <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                                        <path d="M3 6h14M3 10h14M3 14h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                     </svg>
                                 </div>
-                                <span>Google Search</span>
+                                <span>URL Fetching</span>
                             </div>
-                            
                             <div class="capability">
                                 <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                                        <ellipse cx="10" cy="10" rx="8" ry="4" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M2 10v3c0 2.2 3.6 4 8 4s8-1.8 8-4v-3" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M2 7v3" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M18 7v3" stroke="currentColor" stroke-width="1.5"/>
+                                    </svg>
+                                </div>
+                                <span>SQL Databases</span>
+                            </div>
+                            <div class="capability">
+                                <div class="capability-icon">
+                                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                                         <path d="M10 3l2 5h5l-4 3 1.5 5-4.5-3-4.5 3 1.5-5-4-3h5l2-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                                     </svg>
                                 </div>
-                                <span>Advanced reasoning (not working yet)</span>
+                                <span>Advanced Reasoning</span>
                             </div>
                         </div>
                     </div>

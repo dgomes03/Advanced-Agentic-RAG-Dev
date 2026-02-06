@@ -252,9 +252,6 @@ class RAGWebSocketClient {
 
                 // Final math render
                 MarkdownRenderer.renderMath(messageContent);
-
-                // Clean up data attribute
-                messageContent.removeAttribute('data-raw-text');
             }
         }
 

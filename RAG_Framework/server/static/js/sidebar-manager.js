@@ -357,6 +357,7 @@ class SidebarManager {
 
                 const messageContent = document.querySelector(`[data-message-id="${msgId}"]`);
                 if (messageContent) {
+                    messageContent.setAttribute('data-raw-text', msg.content);
                     const html = MarkdownRenderer.render(msg.content);
                     messageContent.innerHTML = html;
                     MarkdownRenderer.renderMath(messageContent);
@@ -440,12 +441,12 @@ class SidebarManager {
         const messagesArea = document.getElementById('messages');
         messagesArea.innerHTML = `
             <div class="welcome">
-                <h1 class="welcome-title">Ask anything</h1>
-                <p class="welcome-subtitle">Search through documents, retrieve information online, and use Advanced Reasoning for complex tasks</p>
+                <h1 class="welcome-title">What can I help with?</h1>
+                <p class="welcome-subtitle">Search your documents, browse the web, query databases, and reason through complex problems.</p>
                 <div class="capabilities">
                     <div class="capability">
                         <div class="capability-icon">
-                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                                 <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
                                 <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
@@ -454,38 +455,48 @@ class SidebarManager {
                     </div>
                     <div class="capability">
                         <div class="capability-icon">
-                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                                 <path d="M5 3h10a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
                                 <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
                         </div>
-                        <span>Document retrieval</span>
+                        <span>Document Retrieval</span>
                     </div>
                     <div class="capability">
                         <div class="capability-icon">
-                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                                <circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M6 10h8M10 6v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
                         </div>
-                        <span>Wikipedia Search</span>
+                        <span>Web Search</span>
                     </div>
                     <div class="capability">
                         <div class="capability-icon">
-                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                                <path d="M3 6h14M3 10h14M3 14h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
                         </div>
-                        <span>Google Search</span>
+                        <span>URL Fetching</span>
                     </div>
                     <div class="capability">
                         <div class="capability-icon">
-                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                                <ellipse cx="10" cy="10" rx="8" ry="4" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M2 10v3c0 2.2 3.6 4 8 4s8-1.8 8-4v-3" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M2 7v3" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M18 7v3" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                        </div>
+                        <span>SQL Databases</span>
+                    </div>
+                    <div class="capability">
+                        <div class="capability-icon">
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                                 <path d="M10 3l2 5h5l-4 3 1.5 5-4.5-3-4.5 3 1.5-5-4-3h5l2-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                             </svg>
                         </div>
-                        <span>Advanced reasoning</span>
+                        <span>Advanced Reasoning</span>
                     </div>
                 </div>
             </div>
