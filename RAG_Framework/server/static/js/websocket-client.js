@@ -263,6 +263,11 @@ class RAGWebSocketClient {
         this.updateStatusIndicator('connected', 'Ready');
         this.updateSendButton(true);
 
+        // Auto-save conversation after each response
+        if (window.sidebarManager) {
+            window.sidebarManager.saveCurrentChat();
+        }
+
         // Focus input
         document.getElementById('user-input').focus();
     }

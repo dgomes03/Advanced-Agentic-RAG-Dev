@@ -15,15 +15,21 @@ class AgenticEvaluator:
         llm_tokenizer
     ) -> Dict[str, Any]:
         """Evaluate if a goal has been satisfactorily completed"""
-        system_prompt = """You are an information completeness evaluator. Assess if the retrieved context adequately addresses the goal.
+        system_prompt = """Evaluate if retrieved context satisfies the search goal.
 
-            Output ONLY valid JSON:
-            {
-                "is_complete": true/false,
-                "confidence": 0.0-1.0,
-                "missing_aspects": ["aspect1", "aspect2"],
-                "reasoning": "brief explanation"
-            }"""
+SCORING (0.0-1.0):
+- Direct answer present: +0.4
+- Complete coverage: +0.3
+- Specific facts/data: +0.2
+- Authoritative source: +0.1
+
+OUTPUT (JSON only):
+{
+    "is_complete": true/false,
+    "confidence": 0.0-1.0,
+    "missing_aspects": ["aspect1", "aspect2"],
+    "reasoning": "brief assessment"
+}"""
         
         user_prompt = f"""Goal: {goal.description}
 
@@ -85,15 +91,20 @@ Is this sufficient? Output JSON only."""
                     else:
                         all_info.append(str(info))
 
-        system_prompt = """You are a final completeness evaluator. Assess if we have enough information to answer the original query comprehensively.
+        system_prompt = """Final assessment: Can we comprehensively answer the original query?
 
-            Output ONLY valid JSON:
-            {
-                "can_answer": true/false,
-                "overall_confidence": 0.0-1.0,
-                "coverage_assessment": "brief assessment",
-                "needs_more_search": true/false
-            }"""
+THRESHOLDS:
+- Confident answer: confidence >= 0.7, all key aspects covered
+- Partial answer: confidence 0.4-0.7, main aspects covered
+- Cannot answer: confidence < 0.4, critical gaps remain
+
+OUTPUT (JSON only):
+{
+    "can_answer": true/false,
+    "overall_confidence": 0.0-1.0,
+    "coverage_assessment": "what we know vs what's missing",
+    "needs_more_search": true/false
+}"""
 
         # Limit to ~8000 characters total, not list items
         combined_info = "\n".join(all_info)

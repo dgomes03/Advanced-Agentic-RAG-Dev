@@ -50,3 +50,4 @@ RAG_Framework/core/__pycache__/cache_manager.cpython-313.pyc
 RAG_Framework/agents/__pycache__/tools.cpython-313.pyc
 RAG_Framework/components/database/__pycache__/sql_connector.cpython-313.pyc
 RAG_Framework/agents/__pycache__/tools.cpython-313.pyc
+RAG_Framework/server/chats

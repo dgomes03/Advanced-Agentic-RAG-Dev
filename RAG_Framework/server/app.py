@@ -2,18 +2,19 @@
 Flask-SocketIO server for RAG Framework with real-time WebSocket streaming.
 Handles query processing, tool call visualization, and advanced reasoning display.
 """
-import json
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import traceback
+
+from .chat_storage import get_chat_storage
 
 # Global reference to the RAG system (retriever)
 rag_system = None
 socketio = None
 
 
-def create_app(retriever, host='localhost', port=5050):
+def create_app(retriever, host='0.0.0.0', port=5050):
     """
     Create and configure the Flask-SocketIO application.
 
@@ -55,6 +56,52 @@ def create_app(retriever, host='localhost', port=5050):
     def status():
         """Health check endpoint."""
         return {'status': 'ready', 'mode': 'websocket'}
+
+    # Chat persistence API routes
+    @app.route('/api/chats', methods=['GET'])
+    def list_chats():
+        """List all conversations."""
+        storage = get_chat_storage()
+        chats = storage.list_chats()
+        return jsonify(chats)
+
+    @app.route('/api/chats', methods=['POST'])
+    def create_chat():
+        """Create a new conversation."""
+        storage = get_chat_storage()
+        data = request.get_json() or {}
+        title = data.get('title')
+        chat = storage.create_chat(title=title)
+        return jsonify(chat), 201
+
+    @app.route('/api/chats/<chat_id>', methods=['GET'])
+    def get_chat(chat_id):
+        """Get a specific conversation."""
+        storage = get_chat_storage()
+        chat = storage.load_chat(chat_id)
+        if chat is None:
+            return jsonify({'error': 'Chat not found'}), 404
+        return jsonify(chat)
+
+    @app.route('/api/chats/<chat_id>', methods=['PUT'])
+    def update_chat(chat_id):
+        """Update a conversation."""
+        storage = get_chat_storage()
+        data = request.get_json() or {}
+        messages = data.get('messages', [])
+        title = data.get('title')
+        chat = storage.update_chat(chat_id, messages, title)
+        if chat is None:
+            return jsonify({'error': 'Chat not found'}), 404
+        return jsonify(chat)
+
+    @app.route('/api/chats/<chat_id>', methods=['DELETE'])
+    def delete_chat(chat_id):
+        """Delete a conversation."""
+        storage = get_chat_storage()
+        if storage.delete_chat(chat_id):
+            return jsonify({'success': True})
+        return jsonify({'error': 'Chat not found'}), 404
 
     # WebSocket event handlers
     @socketio.on('connect')
@@ -117,6 +164,50 @@ def create_app(retriever, host='localhost', port=5050):
             if hasattr(rag_system, 'conversation_manager'):
                 rag_system.conversation_manager.clear()
             emit('status', {'state': 'connected', 'message': 'Ready'})
+
+    @socketio.on('save_chat')
+    def handle_save_chat(data):
+        """
+        Handle save chat request from client.
+        Saves messages to the chat file.
+        """
+        chat_id = data.get('chat_id')
+        messages = data.get('messages', [])
+        title = data.get('title')
+
+        storage = get_chat_storage()
+
+        if chat_id:
+            # Update existing chat
+            chat = storage.update_chat(chat_id, messages, title)
+            if chat:
+                emit('chat_saved', {'chat_id': chat_id, 'chat': chat})
+            else:
+                emit('error', {'message': 'Failed to save chat'})
+        else:
+            # Create new chat
+            chat = storage.create_chat(title=title)
+            chat = storage.update_chat(chat['id'], messages, title)
+            emit('chat_saved', {'chat_id': chat['id'], 'chat': chat, 'is_new': True})
+
+    @socketio.on('load_chat')
+    def handle_load_chat(data):
+        """
+        Handle load chat request from client.
+        Loads chat from storage and sends to client.
+        """
+        chat_id = data.get('chat_id')
+        if not chat_id:
+            emit('error', {'message': 'No chat_id provided'})
+            return
+
+        storage = get_chat_storage()
+        chat = storage.load_chat(chat_id)
+
+        if chat:
+            emit('chat_loaded', {'chat_id': chat_id, 'chat': chat})
+        else:
+            emit('error', {'message': 'Chat not found'})
 
     @socketio.on('query')
     def handle_query(data):
@@ -200,8 +291,7 @@ def create_app(retriever, host='localhost', port=5050):
                 response_text = response
 
             # Emit completion
-            print(f"\nresponse")
-            emit('\ndone', {'message_id': message_id})
+            emit('done', {'message_id': message_id})
             print(f"\nQuery processed successfully. Message ID: {message_id}")
 
         except Exception as e:
@@ -217,7 +307,7 @@ def create_app(retriever, host='localhost', port=5050):
     return app, socketio
 
 
-def run_server(retriever, host='localhost', port=5050):
+def run_server(retriever, host='0.0.0.0', port=5050):
     """
     Create and run the Flask-SocketIO server.
 

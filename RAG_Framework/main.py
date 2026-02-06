@@ -6,7 +6,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import faiss
-from sentence_transformers import SentenceTransformer, CrossEncoder
 from mlx_lm import load
 from mlx_lm.models.cache import make_prompt_cache
 
@@ -34,11 +33,12 @@ if ENABLE_SERVER:
 
 if __name__ == "__main__":
 
-    print("Attempting to load saved FAISS index and BM25 index...")
+    # Check if indices need building first
+    print("Checking for saved indices...")
     indexer = Indexer(enable_ocr=True)
-    multi_vector_index, bm25, metadata_index, faiss_index = indexer.load_indices()
+    indices = indexer.load_indices()
 
-    if multi_vector_index is None or bm25 is None:
+    if indices[0] is None or indices[1] is None:
         print("No saved indices found. Proceeding to build indices.")
         print("Loading and chunking documents...")
         chunks, chunk_metadata = indexer.load_and_content_chunk_pdfs_parallel()
@@ -46,15 +46,10 @@ if __name__ == "__main__":
             print("No documents were loaded or processed. Exiting.")
             exit()
 
-        print("\nLoading AI models...")
+        # Load embedding model temporarily for building indices
+        print("\nLoading embedding model for index building...")
+        from sentence_transformers import SentenceTransformer
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-
-        llm_model, llm_tokenizer = load(MODEL_PATH) # por adapter path aqui
-
-        prompt_cache = make_prompt_cache(llm_model)
-        conversation_manager = ConversationManager()
-
-        reranker = CrossEncoder(RERANKER_MODEL_NAME)
 
         print("\nGenerating embeddings...")
         chunk_embeddings = indexer.get_embeddings(chunks, model=embedding_model)
@@ -67,31 +62,28 @@ if __name__ == "__main__":
         metadata_index = indexer.build_metadata_index(chunk_metadata)
         indexer.save_indices(multi_vector_index, bm25, metadata_index, faiss_index)
         print("Indices built and saved successfully.")
+
+        # Free embedding model after building - will be lazy-loaded later if needed
+        del embedding_model
+        gc.collect()
     else:
-        print("Loaded saved indices from disk.")
-        print("\nLoading AI models...")
-    
-        llm_model, llm_tokenizer = load(MODEL_PATH) # por adapter path aqui
+        print("Saved indices found (will be lazy-loaded when needed).")
 
-        prompt_cache = make_prompt_cache(llm_model)
-        conversation_manager = ConversationManager()
+    # Load only LLM at startup (always needed)
+    print("\nLoading LLM...")
+    llm_model, llm_tokenizer = load(MODEL_PATH)
+    prompt_cache = make_prompt_cache(llm_model)
+    conversation_manager = ConversationManager()
 
-        reranker = CrossEncoder(RERANKER_MODEL_NAME) #TODO: dar load/off-load deste modelo apenas quando for necessario
-        embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME) #TODO: dar load/off-load deste modelo apenas quando for necessario
-
-
-    print("\nCreating Retriever...") # sets up retriever
+    # Create Retriever with lazy loading - embedding model, reranker, and indices
+    # will only be loaded when document retrieval is first called
+    print("\nCreating Retriever (models will be lazy-loaded on first use)...")
     retriever = Retriever(
-        multi_vector_index,
-        embedding_model,
-        faiss_index,
-        bm25,
-        metadata_index,
-        llm_model,
-        llm_tokenizer,
-        reranker
+        llm_model=llm_model,
+        llm_tokenizer=llm_tokenizer,
+        embedding_model_name=EMBEDDING_MODEL_NAME,
+        reranker_model_name=RERANKER_MODEL_NAME
     )
-    print(f"Index contains {len(multi_vector_index)} chunks.")
 
     # Attach the prompt cache and conversation manager to the retriever for easy access in server mode
     ############################# oq é q isto faz? ###############################################################################

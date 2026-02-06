@@ -28,10 +28,27 @@ RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
 MAX_RESPONSE_TOKENS = 1000
 EVAL = False
 
+# === Chunking Configuration ===
+CHUNK_SIZE = 512
+CHUNK_OVERLAP = 128  # 25% overlap to preserve boundary information
+PARENT_CHUNK_SIZE = 2048  # For hierarchical indexing (future use)
+
+# === BM25 Configuration ===
+BM25_ENABLE_STEMMING = True
+BM25_ENABLE_STOPWORDS = True
+BM25_LANGUAGES = ['english', 'portuguese']  # Languages for stemmer and stop words
+
+# === FAISS Configuration ===
+FAISS_INDEX_TYPE = 'auto'  # Options: 'flat', 'ivf', 'hnsw', 'auto'
+FAISS_IVF_NPROBE_RATIO = 4  # nprobe = nlist // this ratio
+
+# === Embedding Configuration ===
+EMBEDDING_USE_PREFIX = True  # Add E5 instruction prefixes (query:/passage:)
+
 
 # === Server Configuration ===
 ENABLE_SERVER = True
-SERVER_HOST = 'localhost'
+SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5050
 
 # === Reasoning Configuration ===

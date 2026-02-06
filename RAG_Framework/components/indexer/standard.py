@@ -12,9 +12,16 @@ from rank_bm25 import BM25Okapi
 from RAG_Framework.core.config import (
     DOCUMENTS_DIR, EMBEDDING_MODEL_NAME,
     MULTIVECTOR_INDEX_PATH, BM25_DATA_PATH,
-    METADATA_INDEX_PATH, FAISS_INDEX_PATH
+    METADATA_INDEX_PATH, FAISS_INDEX_PATH,
+    CHUNK_SIZE, CHUNK_OVERLAP,
+    BM25_ENABLE_STEMMING, BM25_ENABLE_STOPWORDS, BM25_LANGUAGES,
+    FAISS_INDEX_TYPE, FAISS_IVF_NPROBE_RATIO,
+    EMBEDDING_USE_PREFIX
 )
 from RAG_Framework.core.utils import save_pickle, load_pickle
+from RAG_Framework.core.text_processing import (
+    tokenize_for_bm25, clean_text, prepare_for_embedding
+)
 
 
 class Indexer:
@@ -34,8 +41,66 @@ class Indexer:
         self.ocr_resolution = ocr_resolution
 
     @staticmethod
+    def chunk_text_with_overlap(text, max_chunk_length, chunk_overlap):
+        """
+        Split text into chunks with overlap to preserve boundary information.
+
+        Args:
+            text: Text to chunk
+            max_chunk_length: Maximum characters per chunk
+            chunk_overlap: Number of characters to overlap between chunks
+
+        Returns:
+            List of text chunks
+        """
+        if not text:
+            return []
+
+        # Split into sentences
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        overlap_sentences = []  # Sentences to carry over to next chunk
+
+        for sentence in sentences:
+            sentence_len = len(sentence)
+
+            # If adding this sentence exceeds max length and we have content
+            if current_length + sentence_len > max_chunk_length and current_chunk:
+                # Save current chunk
+                chunk_text = " ".join(current_chunk).strip()
+                if chunk_text:
+                    chunks.append(chunk_text)
+
+                # Determine overlap: keep sentences from the end that fit within overlap size
+                overlap_sentences = []
+                overlap_length = 0
+                for sent in reversed(current_chunk):
+                    if overlap_length + len(sent) <= chunk_overlap:
+                        overlap_sentences.insert(0, sent)
+                        overlap_length += len(sent) + 1
+                    else:
+                        break
+
+                # Start new chunk with overlap sentences
+                current_chunk = overlap_sentences + [sentence]
+                current_length = sum(len(s) + 1 for s in current_chunk)
+            else:
+                current_chunk.append(sentence)
+                current_length += sentence_len + 1
+
+        # Don't forget the last chunk
+        if current_chunk:
+            chunk_text = " ".join(current_chunk).strip()
+            if chunk_text:
+                chunks.append(chunk_text)
+
+        return chunks
+
+    @staticmethod
     def process_single_pdf(file_info):
-        file_path, doc_id, max_chunk_length, enable_ocr, ocr_min_width, ocr_min_height, ocr_resolution = file_info
+        file_path, doc_id, max_chunk_length, chunk_overlap, enable_ocr, ocr_min_width, ocr_min_height, ocr_resolution = file_info
         doc_chunks = []
         doc_metadata = []
         filename = os.path.basename(file_path)
@@ -65,23 +130,17 @@ class Indexer:
                     # Extract paragraph text
                     text = page.extract_text()
                     if text:
-                        # Use sentence-aware splitting instead of fixed length
-                        sentences = re.split(r'(?<=[.!?])\s+', text)
-                        current_chunk = []
-                        current_length = 0
-                        chunks = []
-                        for sentence in sentences:
-                            if current_length + len(sentence) > max_chunk_length and current_chunk:
-                                chunks.append(" ".join(current_chunk).strip()) # Strip whitespace
-                                current_chunk = [sentence]
-                                current_length = len(sentence)
-                            else:
-                                current_chunk.append(sentence)
-                                current_length += len(sentence) + 1
-                        if current_chunk:
-                            chunks.append(" ".join(current_chunk).strip()) # Strip whitespace
+                        # Import text cleaning (lazy import to avoid circular deps in static method)
+                        from RAG_Framework.core.text_processing import clean_text
+
+                        # Clean and normalize text before chunking
+                        text = clean_text(text)
+
+                        # Use sentence-aware splitting with overlap
+                        chunks = Indexer.chunk_text_with_overlap(text, max_chunk_length, chunk_overlap)
+
                         for chunk_idx, chunk in enumerate(chunks):
-                            if chunk: # Only add non-empty chunks
+                            if chunk:  # Only add non-empty chunks
                                 elements.append({
                                     'type': 'text',
                                     'content': chunk,
@@ -179,8 +238,23 @@ class Indexer:
                 metadata_index[full_doc_id].append(idx)
         return metadata_index
 
-    def get_embeddings(self, texts, model, batch_size=32):
-        """Generate embeddings for a list of texts in batches."""
+    def get_embeddings(self, texts, model, batch_size=32, is_query=False):
+        """
+        Generate embeddings for a list of texts in batches.
+
+        Args:
+            texts: List of texts to embed
+            model: Sentence transformer model
+            batch_size: Batch size for encoding
+            is_query: If True, use "query: " prefix; if False, use "passage: " prefix
+
+        Returns:
+            numpy array of embeddings
+        """
+        # Apply E5 prefixes if enabled
+        if EMBEDDING_USE_PREFIX:
+            texts = [prepare_for_embedding(text, is_query=is_query) for text in texts]
+
         all_embeddings = []
         for i in tqdm(range(0, len(texts), batch_size), desc="Generating Embeddings"):
             batch = texts[i:i+batch_size]
@@ -188,19 +262,101 @@ class Indexer:
             all_embeddings.extend(embeddings)
         return np.array(all_embeddings, dtype=np.float32)
 
-    def build_faiss_index(self, multi_vector_index):
+    def build_faiss_index(self, multi_vector_index, index_type=None):
+        """
+        Build FAISS index with automatic selection based on corpus size.
+
+        Args:
+            multi_vector_index: List of dicts with 'embedding' key
+            index_type: Override index type ('flat', 'ivf', 'hnsw', 'auto')
+                       If None, uses FAISS_INDEX_TYPE from config
+
+        Index selection:
+            - < 10,000 vectors: IndexFlatIP (exact search)
+            - 10,000 - 1,000,000: IndexIVFFlat (inverted file)
+            - > 1,000,000: IndexHNSWFlat (graph-based)
+
+        Returns:
+            FAISS index
+        """
         if not multi_vector_index:
             print("Warning: Multi-vector index is empty. Cannot build FAISS index.")
             return None
+
+        if index_type is None:
+            index_type = FAISS_INDEX_TYPE
+
         embeddings = np.array([item["embedding"] for item in multi_vector_index]).astype('float32')
+        n_vectors = embeddings.shape[0]
         dimension = embeddings.shape[1]
-        index = faiss.IndexFlatIP(dimension) # Inner Product for normalized vectors
-        faiss.normalize_L2(embeddings) # Ensure embeddings are normalized
-        index.add(embeddings)
+
+        # Normalize embeddings for inner product similarity
+        faiss.normalize_L2(embeddings)
+
+        # Auto-select index type based on corpus size
+        if index_type == 'auto':
+            if n_vectors < 10000:
+                index_type = 'flat'
+            elif n_vectors < 1000000:
+                index_type = 'ivf'
+            else:
+                index_type = 'hnsw'
+
+        print(f"Building FAISS index: type={index_type}, vectors={n_vectors}, dimension={dimension}")
+
+        if index_type == 'flat':
+            # Exact search - O(n) but 100% recall
+            index = faiss.IndexFlatIP(dimension)
+            index.add(embeddings)
+
+        elif index_type == 'ivf':
+            # IVF for medium scale - O(sqrt(n)) with ~95-99% recall
+            # nlist = number of clusters (sqrt(n) is a good default)
+            nlist = max(int(np.sqrt(n_vectors)), 1)
+            nlist = min(nlist, n_vectors)  # Can't have more clusters than vectors
+
+            quantizer = faiss.IndexFlatIP(dimension)
+            index = faiss.IndexIVFFlat(quantizer, dimension, nlist, faiss.METRIC_INNER_PRODUCT)
+
+            # Training required for IVF
+            print(f"Training IVF index with nlist={nlist}...")
+            index.train(embeddings)
+            index.add(embeddings)
+
+            # Set nprobe for search (tradeoff: higher = better recall, slower)
+            index.nprobe = max(nlist // FAISS_IVF_NPROBE_RATIO, 1)
+            print(f"IVF index built: nlist={nlist}, nprobe={index.nprobe}")
+
+        elif index_type == 'hnsw':
+            # HNSW for large scale - O(log n) with ~95% recall
+            # M = number of neighbors per node (32 is a good default)
+            M = 32
+            index = faiss.IndexHNSWFlat(dimension, M, faiss.METRIC_INNER_PRODUCT)
+            index.hnsw.efConstruction = 40  # Build-time accuracy
+            index.hnsw.efSearch = 16  # Search-time accuracy (can adjust later)
+            index.add(embeddings)
+            print(f"HNSW index built: M={M}, efConstruction=40, efSearch=16")
+
+        else:
+            raise ValueError(f"Unknown FAISS index type: {index_type}. Use 'flat', 'ivf', 'hnsw', or 'auto'")
+
         return index
 
     def build_bm25_index(self, texts):
-        tokenized_corpus = [doc.lower().split() for doc in texts]
+        """
+        Build BM25 index with improved tokenization.
+
+        Uses stemming and stop word removal for better matching.
+        """
+        tokenized_corpus = [
+            tokenize_for_bm25(
+                doc,
+                enable_stemming=BM25_ENABLE_STEMMING,
+                enable_stopwords=BM25_ENABLE_STOPWORDS,
+                languages=BM25_LANGUAGES
+            )
+            for doc in tqdm(texts, desc="Tokenizing for BM25")
+        ]
         bm25_index = BM25Okapi(tokenized_corpus)
         return bm25_index
 
@@ -248,17 +404,23 @@ class Indexer:
                 results.append(multi_vector_index[idx])
         return results
 
-    def load_and_content_chunk_pdfs_parallel(self, max_chunk_length=512):
+    def load_and_content_chunk_pdfs_parallel(self, max_chunk_length=None, chunk_overlap=None):
         """Load and process PDF documents in parallel"""
+        # Use config defaults if not specified
+        if max_chunk_length is None:
+            max_chunk_length = CHUNK_SIZE
+        if chunk_overlap is None:
+            chunk_overlap = CHUNK_OVERLAP
+
         pdf_files = [os.path.join(self.documents_dir, f) for f in os.listdir(self.documents_dir)
                     if f.lower().endswith('.pdf')]
         print(f"Found {len(pdf_files)} PDF files to process.")
         if not pdf_files:
             return [], []
 
-        # Pass OCR configuration to each process
+        # Pass OCR configuration and chunk overlap to each process
         file_infos = [
-            (f, i, max_chunk_length, self.enable_ocr, self.ocr_min_width, self.ocr_min_height, self.ocr_resolution)
+            (f, i, max_chunk_length, chunk_overlap, self.enable_ocr, self.ocr_min_width, self.ocr_min_height, self.ocr_resolution)
             for i, f in enumerate(pdf_files)
         ]
 

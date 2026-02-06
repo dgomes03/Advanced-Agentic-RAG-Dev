@@ -308,26 +308,31 @@ class Generator:
                         
                     elif "[ARGS]" in response_text:
                         # NEW FORMAT: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
-                        tool_section = response_text.split("[TOOL_CALLS]")[1]
-                        tool_name, args_part = tool_section.split("[ARGS]", 1)
-                        tool_name = tool_name.strip()
-                        
-                        # Extract JSON object
-                        args_part = args_part.strip()
-                        brace_count = 0
-                        end_idx = 0
-                        for i, char in enumerate(args_part):
-                            if char == '{':
-                                brace_count += 1
-                            elif char == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    end_idx = i + 1
-                                    break
-                        
-                        args_json = args_part[:end_idx] if end_idx > 0 else "{}"
-                        tool_args = json.loads(args_json) if args_json else {}
-                        tool_calls = [{"name": tool_name, "arguments": tool_args}]
+                        # Handle multiple tool calls by finding all [TOOL_CALLS]...[ARGS]... patterns
+                        import re
+                        tool_pattern = re.compile(r'\[TOOL_CALLS\]([^\[]+)\[ARGS\]')
+                        matches = list(tool_pattern.finditer(response_text))
+
+                        for match in matches:
+                            tool_name = match.group(1).strip()
+                            args_start = match.end()
+                            args_part = response_text[args_start:].strip()
+
+                            # Extract JSON object
+                            brace_count = 0
+                            end_idx = 0
+                            for i, char in enumerate(args_part):
+                                if char == '{':
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        end_idx = i + 1
+                                        break
+
+                            args_json = args_part[:end_idx] if end_idx > 0 else "{}"
+                            tool_args = json.loads(args_json) if args_json else {}
+                            tool_calls.append({"name": tool_name, "arguments": tool_args})
                     
                     else:
                         print("Unknown tool call format")

@@ -1,23 +1,93 @@
 import re
+import threading
 import numpy as np
 import faiss
 from collections import defaultdict
 from mlx_lm import generate
 
+from RAG_Framework.core.config import (
+    BM25_ENABLE_STEMMING, BM25_ENABLE_STOPWORDS, BM25_LANGUAGES,
+    EMBEDDING_USE_PREFIX
+)
+from RAG_Framework.core.text_processing import tokenize_for_bm25, prepare_for_embedding
+
 
 class Retriever:
-    def __init__(self, multi_vector_index, embedding_model, faiss_index,
-                 bm25, metadata_index,
-                 llm_model, llm_tokenizer, reranker):
-        self.multi_vector_index = multi_vector_index
-        self.embedding_model = embedding_model
-        self.faiss_index = faiss_index
-        self.bm25 = bm25
-        self.metadata_index = metadata_index
+    def __init__(self, llm_model, llm_tokenizer,
+                 embedding_model_name=None, reranker_model_name=None,
+                 index_paths=None):
+        # LLM needed immediately for query expansion
         self.llm_model = llm_model
         self.llm_tokenizer = llm_tokenizer
-        self.reranker = reranker
-        self.last_retrieved_metadata = [] # ADDED: Initialize attribute
+
+        # Store config for lazy loading
+        self._embedding_model_name = embedding_model_name
+        self._reranker_model_name = reranker_model_name
+        self._index_paths = index_paths
+
+        # Private backing fields (None until loaded)
+        self._embedding_model = None
+        self._reranker = None
+        self._multi_vector_index = None
+        self._bm25 = None
+        self._metadata_index = None
+        self._faiss_index = None
+        self._indices_loaded = False
+
+        # Thread safety for lazy loading
+        self._load_lock = threading.Lock()
+
+        self.last_retrieved_metadata = []
+
+    @property
+    def embedding_model(self):
+        if self._embedding_model is None:
+            with self._load_lock:
+                if self._embedding_model is None:
+                    print(f"Loading embedding model: {self._embedding_model_name}...")
+                    from sentence_transformers import SentenceTransformer
+                    self._embedding_model = SentenceTransformer(self._embedding_model_name)
+        return self._embedding_model
+
+    @property
+    def reranker(self):
+        if self._reranker is None:
+            with self._load_lock:
+                if self._reranker is None:
+                    print(f"Loading reranker: {self._reranker_model_name}...")
+                    from sentence_transformers import CrossEncoder
+                    self._reranker = CrossEncoder(self._reranker_model_name)
+        return self._reranker
+
+    def _ensure_indices_loaded(self):
+        if not self._indices_loaded:
+            with self._load_lock:
+                if not self._indices_loaded:
+                    print("Loading indices...")
+                    from RAG_Framework.components.indexer import Indexer
+                    indexer = Indexer()
+                    self._multi_vector_index, self._bm25, self._metadata_index, self._faiss_index = indexer.load_indices()
+                    self._indices_loaded = True
+
+    @property
+    def multi_vector_index(self):
+        self._ensure_indices_loaded()
+        return self._multi_vector_index
+
+    @property
+    def faiss_index(self):
+        self._ensure_indices_loaded()
+        return self._faiss_index
+
+    @property
+    def bm25(self):
+        self._ensure_indices_loaded()
+        return self._bm25
+
+    @property
+    def metadata_index(self):
+        self._ensure_indices_loaded()
+        return self._metadata_index
 
     @staticmethod
     def normalize_scores(scores):
@@ -92,11 +162,15 @@ class Retriever:
 
     def expand_query(self, query):
         system_prompt = (
-            "You are a query rephraser and expander for document search.\n"
-            "Generate two alternative phrasings "
-            "that capture different ways the same question could be asked for retrieving relevant context.\n"
-            "Also provide between 1 to 5 buzz words from the phrases that can be relevant for retrieving relevant context.\n"
-            "IMPORTANT: Dont include any other commentary like 'Buzz words:' at the end!"
+            "You are a query expander for document retrieval.\n\n"
+            "OUTPUT FORMAT (exactly 3 lines):\n"
+            "1. [First rephrasing - use synonyms]\n"
+            "2. [Second rephrasing - broader/narrower scope]\n"
+            "3. Keywords: term1, term2, term3, term4, term5\n\n"
+            "GUIDELINES:\n"
+            "- Include technical terms and common alternatives\n"
+            "- Extract 3-5 core searchable keywords\n"
+            "- No explanations, just the output"
         )
         message = (
             f"ORIGINAL QUERY:\n{query}")
@@ -150,19 +224,30 @@ class Retriever:
         # Expand query variants for retrieval
         expanded_queries = [query] + self.expand_query(query)
 
-        # Dense retrieval scoring
+        # Dense retrieval scoring with E5 query prefixes
         dense_scores = defaultdict(float)
-        query_embeddings = self.embedding_model.encode(expanded_queries)
+        # Add query prefix for E5 models if enabled
+        prefixed_queries = [
+            prepare_for_embedding(q, is_query=True, use_prefix=EMBEDDING_USE_PREFIX)
+            for q in expanded_queries
+        ]
+        query_embeddings = self.embedding_model.encode(prefixed_queries)
         for query_emb in query_embeddings:
             faiss_results = self.retrieve_with_faiss(query_emb, self.faiss_index, k=k)
             for idx, score in faiss_results:
                 dense_scores[idx] += score
         dense_scores_norm = self.normalize_scores(dense_scores)
 
-        # Sparse retrieval scoring (BM25)
+        # Sparse retrieval scoring (BM25) with improved tokenization
         sparse_scores = defaultdict(float)
         for exp_query in expanded_queries:
-            tokenized_query = exp_query.lower().split()
+            # Use improved tokenization with stemming and stop word removal
+            tokenized_query = tokenize_for_bm25(
+                exp_query,
+                enable_stemming=BM25_ENABLE_STEMMING,
+                enable_stopwords=BM25_ENABLE_STOPWORDS,
+                languages=BM25_LANGUAGES
+            )
             bm25_results = self.retrieve_with_bm25(tokenized_query, self.bm25, top_k=k)
             for idx, score in bm25_results:
                 sparse_scores[idx] += score

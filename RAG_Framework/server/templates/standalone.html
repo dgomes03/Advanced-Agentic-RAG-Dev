@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Intelligence</title>
 
+    <!-- marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
     <!-- KaTeX for LaTeX math rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
@@ -49,8 +52,12 @@
             --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
 
             /* Typography */
-            --font-system: 'Helvetica Neue', sans-serif;
+            --font-system: 'Helvetica Neue', Geneva, Tahoma, sans-serif;
+            --font-serif: 'Times New Roman', Times, serif;
             --font-mono: 'Cascadia Code', Menlo, Monaco, monospace;
+
+            /* Sidebar */
+            --sidebar-width: 280px;
         }
 
         * {
@@ -73,10 +80,310 @@
 
         .app-container {
             height: 100vh;
+            width: 100vw;
+            display: flex;
+            flex-direction: row;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+
+        /* ===== Sidebar ===== */
+
+        .sidebar {
+            width: var(--sidebar-width);
+            min-width: 200px;
+            max-width: 500px;
+            height: 100%;
+            background: var(--color-surface);
+            border-right: 1px solid var(--color-border);
             display: flex;
             flex-direction: column;
-            max-width: 2048px;
-            margin: 0 auto;
+            flex-shrink: 0;
+            z-index: 200;
+            position: relative;
+        }
+
+        /* Resize handle */
+        .sidebar-resize-handle {
+            position: absolute;
+            top: 0;
+            right: -4px;
+            width: 8px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 201;
+            background: transparent;
+            transition: background 0.2s ease;
+        }
+
+        .sidebar-resize-handle:hover,
+        .sidebar-resize-handle.dragging {
+            background: var(--color-accent);
+        }
+
+        .sidebar-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 4px;
+            height: 40px;
+            border-radius: 2px;
+            background: var(--color-border);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .sidebar-resize-handle:hover::after,
+        .sidebar-resize-handle.dragging::after {
+            opacity: 1;
+            background: white;
+        }
+
+        .sidebar-header {
+            padding: var(--spacing-md);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--spacing-sm);
+        }
+
+        .sidebar-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--color-text);
+        }
+
+        .sidebar-new-btn {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            padding: var(--spacing-sm) var(--spacing-md);
+            background: var(--color-accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .sidebar-new-btn:hover {
+            background: var(--color-accent-hover);
+            transform: scale(1.02);
+        }
+
+        .sidebar-new-btn:active {
+            transform: scale(0.98);
+        }
+
+        .sidebar-search {
+            padding: var(--spacing-sm) var(--spacing-md);
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        .sidebar-search-input {
+            width: 100%;
+            padding: var(--spacing-sm) var(--spacing-md);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            background: var(--color-bg);
+            font-size: 13px;
+            color: var(--color-text);
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+
+        .sidebar-search-input:focus {
+            border-color: var(--color-accent);
+        }
+
+        .sidebar-search-input::placeholder {
+            color: var(--color-text-secondary);
+        }
+
+        .conversations-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: var(--spacing-sm);
+        }
+
+        .conversations-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .conversations-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .conversations-list::-webkit-scrollbar-thumb {
+            background: var(--color-border);
+            border-radius: 3px;
+        }
+
+        .conversation-item {
+            padding: var(--spacing-sm) var(--spacing-md);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            margin-bottom: var(--spacing-xs);
+            transition: all 0.15s ease;
+            position: relative;
+        }
+
+        .conversation-item:hover {
+            background: var(--color-bg);
+        }
+
+        .conversation-item.active {
+            background: var(--color-bg);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .conversation-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--color-text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 24px;
+        }
+
+        .conversation-preview {
+            font-size: 12px;
+            color: var(--color-text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 2px;
+        }
+
+        .conversation-timestamp {
+            font-size: 11px;
+            color: var(--color-text-secondary);
+            margin-top: 4px;
+        }
+
+        .conversation-delete {
+            position: absolute;
+            top: var(--spacing-sm);
+            right: var(--spacing-sm);
+            width: 20px;
+            height: 20px;
+            border: none;
+            background: transparent;
+            color: var(--color-text-secondary);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.15s ease;
+        }
+
+        .conversation-item:hover .conversation-delete {
+            opacity: 1;
+        }
+
+        .conversation-delete:hover {
+            background: var(--color-error);
+            color: white;
+        }
+
+        .conversations-empty {
+            text-align: center;
+            padding: var(--spacing-xl);
+            color: var(--color-text-secondary);
+            font-size: 13px;
+        }
+
+        /* ===== Main Area ===== */
+
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            min-width: 0;
+        }
+
+        /* Sidebar toggle button */
+        .sidebar-toggle {
+            display: none;
+            width: 36px;
+            height: 36px;
+            border: none;
+            background: var(--color-surface);
+            color: var(--color-text);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            align-items: center;
+            justify-content: center;
+            margin-right: var(--spacing-sm);
+            transition: all 0.2s ease;
+        }
+
+        .sidebar-toggle:hover {
+            background: var(--color-border);
+        }
+
+        /* Sidebar overlay for mobile */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.3);
+            z-index: 150;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .sidebar-overlay.visible {
+            opacity: 1;
+        }
+
+        /* Responsive sidebar */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: 0;
+                top: 0;
+                bottom: 0;
+                width: 280px !important;
+                transform: translateX(-100%);
+                box-shadow: var(--shadow-md);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .sidebar-toggle {
+                display: flex;
+            }
+
+            .sidebar-overlay {
+                display: block;
+                pointer-events: none;
+            }
+
+            .sidebar-overlay.visible {
+                pointer-events: auto;
+            }
+
+            .sidebar-resize-handle {
+                display: none;
+            }
         }
 
         /* ===== Header ===== */
@@ -176,11 +483,12 @@
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
+            min-height: 0;
         }
 
         .messages-wrapper {
             min-height: 100%;
-            padding: var(--spacing-2xl) var(--spacing-xl) 120px;
+            padding: var(--spacing-2xl) var(--spacing-xl) var(--spacing-xl);
         }
 
         .messages {
@@ -188,7 +496,7 @@
             margin: 0 auto;
             display: flex;
             flex-direction: column;
-            gap: var(--spacing-xs);
+            gap: var(--spacing-lg);
         }
 
         /* Custom Scrollbar */
@@ -321,8 +629,9 @@
             font-size: 15px;
             color: var(--color-text);
             font-weight: 400;
-            line-height: 1.6;
+            line-height: 1.7;
             display: block;
+            padding: var(--spacing-xs) 0;
         }
 
         /* Streaming Cursor */
@@ -357,8 +666,14 @@
         .message-content h3 {
             font-weight: 600;
             letter-spacing: -0.02em;
-            margin: 0.5em 0;
+            margin: 1.2em 0 0.6em 0;
             color: var(--color-text);
+        }
+
+        .message-content h1:first-child,
+        .message-content h2:first-child,
+        .message-content h3:first-child {
+            margin-top: 0;
         }
 
         .message-content h1 { font-size: 28px; }
@@ -391,11 +706,20 @@
         .message-content ul,
         .message-content ol {
             margin: var(--spacing-md) 0;
-            padding-left: var(--spacing-lg);
+            padding-left: var(--spacing-xl);
         }
 
         .message-content li {
-            margin: var(--spacing-xs) 0;
+            margin: var(--spacing-sm) 0;
+            line-height: 1.6;
+        }
+
+        .message-content li:first-child {
+            margin-top: 0;
+        }
+
+        .message-content li:last-child {
+            margin-bottom: 0;
         }
 
         .message-content a {
@@ -419,7 +743,7 @@
         .message-content hr {
             border: none;
             border-top: 1px solid var(--color-border);
-            margin: var(--spacing-xs) 0;
+            margin: var(--spacing-lg) 0;
         }
 
         /* ===== Tools ===== */
@@ -742,15 +1066,12 @@
         /* ===== Input Area ===== */
 
         .input-area {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
             background: rgba(255, 255, 255, 0.8);
             backdrop-filter: saturate(180%) blur(20px);
             -webkit-backdrop-filter: saturate(180%) blur(20px);
             border-top: 1px solid var(--color-border);
             padding: var(--spacing-lg);
+            flex-shrink: 0;
         }
 
         .input-container {
@@ -853,7 +1174,7 @@
             }
 
             .messages-wrapper {
-                padding: var(--spacing-lg) var(--spacing-md) 120px;
+                padding: var(--spacing-lg) var(--spacing-md) var(--spacing-md);
             }
 
             .input-area {
@@ -888,26 +1209,53 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
-        <header class="header">
-            <div class="header-inner">
-                <div class="header-title">Advanced RAG</div>
-                <div class="header-actions">
-                    <button id="new-conversation-btn" class="new-conversation-btn" aria-label="New conversation" title="Start new conversation">
-                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                            <path d="M10 4v12M4 10h12"/>
-                        </svg>
-                    </button>
-                    <div class="status-indicator" id="status-indicator">
-                        <span class="status-dot"></span>
-                        <span class="status-text" id="status-text">Ready</span>
+        <!-- Sidebar Overlay (for mobile) -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
+            <div class="sidebar-header">
+                <span class="sidebar-title">Conversations</span>
+                <button class="sidebar-new-btn" id="sidebar-new-btn" aria-label="New conversation">
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                        <path d="M10 4v12M4 10h12"/>
+                    </svg>
+                    <span>New</span>
+                </button>
+            </div>
+            <div class="sidebar-search">
+                <input type="text" class="sidebar-search-input" id="sidebar-search" placeholder="Search conversations...">
+            </div>
+            <div class="conversations-list" id="conversations-list">
+                <div class="conversations-empty">No conversations yet</div>
+            </div>
+        </aside>
+
+        <!-- Main Area -->
+        <div class="main-area">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-inner">
+                    <div style="display: flex; align-items: center;">
+                        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                                <path d="M3 5h14M3 10h14M3 15h14"/>
+                            </svg>
+                        </button>
+                        <div class="header-title">Advanced RAG</div>
+                    </div>
+                    <div class="header-actions">
+                        <div class="status-indicator" id="status-indicator">
+                            <span class="status-dot"></span>
+                            <span class="status-text" id="status-text">Ready</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </header>
+            </header>
 
-        <!-- Messages Area -->
-        <main class="main-content">
+            <!-- Messages Area -->
+            <main class="main-content">
             <div class="messages-wrapper">
                 <div class="messages" id="messages">
                     <!-- Welcome message -->
@@ -972,25 +1320,26 @@
             </div>
         </main>
 
-        <!-- Input Area -->
-        <div class="input-area">
-            <div class="input-container">
-                <textarea
-                    id="user-input"
-                    class="input"
-                    placeholder="Ask about your documents..."
-                    rows="1"></textarea>
-                <button id="send-btn" class="send-btn" aria-label="Send">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M3 10l14 0M17 10l-5-5M17 10l-5 5"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"/>
-                    </svg>
-                </button>
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-container">
+                    <textarea
+                        id="user-input"
+                        class="input"
+                        placeholder="Ask about your documents..."
+                        rows="1"></textarea>
+                    <button id="send-btn" class="send-btn" aria-label="Send">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <path d="M3 10l14 0M17 10l-5-5M17 10l-5 5"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
             </div>
-        </div>
+        </div><!-- End main-area -->
     </div>
 
     <!-- Templates -->
@@ -1081,108 +1430,23 @@
         </div>
     </template>
 
+    <template id="conversation-item-template">
+        <div class="conversation-item" data-chat-id="">
+            <div class="conversation-title"></div>
+            <div class="conversation-preview"></div>
+            <div class="conversation-timestamp"></div>
+            <button class="conversation-delete" aria-label="Delete conversation">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <path d="M2 2l8 8M10 2l-8 8"/>
+                </svg>
+            </button>
+        </div>
+    </template>
+
     <!-- Inline JavaScript -->
     <script src="../static/js/markdown-renderer.js"></script>
     <script src="../static/js/ui-components.js"></script>
     <script src="../static/js/websocket-client.js"></script>
-
-    <!-- New Conversation Handler -->
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const newConversationBtn = document.getElementById('new-conversation-btn');
-
-            newConversationBtn.addEventListener('click', () => {
-                // Abort any ongoing generation by disconnecting and reconnecting
-                if (window.ragClient && ragClient.socket) {
-                    console.log('Aborting ongoing generation...');
-
-                    // Send abort signal to server BEFORE disconnecting
-                    ragClient.socket.emit('abort_generation', {});
-
-                    // Reset client state immediately
-                    ragClient.currentMessageId = null;
-                    ragClient.isProcessing = false;
-
-                    // Disconnect to stop receiving events
-                    ragClient.socket.disconnect();
-
-                    // Reconnect after a brief delay to ensure server cleanup
-                    setTimeout(() => {
-                        ragClient.socket.connect();
-
-                        // Clear cache after reconnection
-                        ragClient.socket.once('connect', () => {
-                            ragClient.socket.emit('clear_cache', {});
-                            ragClient.updateSendButton(true);
-                            ragClient.updateStatusIndicator('connected', 'Ready');
-                        });
-                    }, 100);
-                }
-
-                // Clear all messages and show welcome screen
-                const messagesArea = document.getElementById('messages');
-                messagesArea.innerHTML = `
-                    <div class="welcome">
-                        <div class="welcome-icon">
-                            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-                                <rect width="64" height="64" rx="16" fill="currentColor" opacity="0.06"/>
-                                <path d="M32 20v24M20 32h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
-                            </svg>
-                        </div>
-                        <h1 class="welcome-title">Ask anything</h1>
-                        <p class="welcome-subtitle">Search through documents, retrieve information online, and use Advanced Reasoning for complex tasks</p>
-                        <div class="capabilities">
-                            <div class="capability">
-                                <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                    </svg>
-                                </div>
-                                <span>Document Search</span>
-                            </div>
-                            <div class="capability">
-                                <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <path d="M5 3h10a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                    </svg>
-                                </div>
-                                <span>Document retrieval</span>
-                            </div>
-                            <div class="capability">
-                                <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                    </svg>
-                                </div>
-                                <span>Wikipedia Search</span>
-                            </div>
-                            <div class="capability">
-                                <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M12 12l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                    </svg>
-                                </div>
-                                <span>Google Search</span>
-                            </div>
-                            <div class="capability">
-                                <div class="capability-icon">
-                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                                        <path d="M10 3l2 5h5l-4 3 1.5 5-4.5-3-4.5 3 1.5-5-4-3h5l2-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                                    </svg>
-                                </div>
-                                <span>Advanced reasoning</span>
-                            </div>
-                        </div>
-                    </div>
-                `;
-
-                console.log('Conversation cleared and generation aborted');
-            });
-        });
-    </script>
+    <script src="../static/js/sidebar-manager.js"></script>
 </body>
 </html>

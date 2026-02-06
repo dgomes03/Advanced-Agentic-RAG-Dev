@@ -105,19 +105,21 @@ class AgenticPlanner:
     def create_initial_plan(query: str, llm_model, llm_tokenizer) -> ReasoningPlan:
         """Create initial reasoning plan by decomposing the query"""
 
-        system_prompt = """You are a query decomposition expert. Break down queries into sub-goals.
-            For each sub-goal:
-            1. Describe what information is needed
-            2. Assign priority (1=highest, 5=lowest)
-            3. Keep descriptions clear and searchable
+        system_prompt = """You are a research planning assistant. Decompose queries into searchable sub-goals.
 
-            Output ONLY valid JSON in this exact format:
-            {
-                "goals": [
-                    {"description": "goal description", "priority": 1},
-                    {"description": "another goal", "priority": 2}
-                ]
-            }"""
+RULES:
+- Create 2-4 focused sub-goals (no more)
+- Each goal = one searchable question
+- Priority: 1=essential, 2=helpful, 3=supplementary
+- Order from foundational to dependent
+
+OUTPUT (JSON only):
+{
+    "goals": [
+        {"description": "specific searchable question", "priority": 1},
+        {"description": "another question", "priority": 2}
+    ]
+}"""
         
         user_prompt = f"""Query: {query}
 
@@ -175,16 +177,19 @@ class AgenticPlanner:
 
         """Replan based on evaluation results"""
 
-        system_prompt = """You are a reasoning coordinator. Based on the evaluation, decide if we need additional search goals.
+        system_prompt = """You are a research coordinator. Decide if more searches are needed.
 
-            Output ONLY valid JSON:
-            {
-                "needs_replanning": true/false,
-                "new_goals": [
-                    {"description": "new goal if needed", "priority": 1}
-                ],
-                "reasoning": "brief explanation"
-            }"""
+DECISION CRITERIA:
+- Are there unanswered aspects of the original query?
+- Did searches reveal new information needs?
+- Is confidence below 0.7 for key facts?
+
+OUTPUT (JSON only):
+{
+    "needs_replanning": true/false,
+    "new_goals": [{"description": "new search need", "priority": 1}],
+    "reasoning": "one-sentence explanation"
+}"""
         
         current_state = {
             "completed_goals": [g.description for g in plan.goals if g.status == "completed"],
