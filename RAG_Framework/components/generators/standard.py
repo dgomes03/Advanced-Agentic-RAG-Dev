@@ -225,10 +225,14 @@ class Generator:
         """Search DuckDuckGo (free, no API key required)."""
         try:
             # Try the newer ddgs package first, fallback to duckduckgo_search
+            DDGS = None
             try:
                 from ddgs import DDGS
             except ImportError:
-                from duckduckgo_search import DDGS
+                try:
+                    from duckduckgo_search import DDGS
+                except ImportError:
+                    return {'error': 'DuckDuckGo search requires the ddgs package. Install with: pip install ddgs', 'query': query}
 
             results = []
             with DDGS() as ddgs:

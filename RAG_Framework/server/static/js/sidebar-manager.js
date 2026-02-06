@@ -327,9 +327,12 @@ class SidebarManager {
                 this.displayLoadedChat(chat);
                 this.renderConversations();
 
-                // Also clear the server-side cache for a fresh context
+                // Restore server-side KV-cache and conversation manager
                 if (window.ragClient) {
-                    ragClient.socket.emit('clear_cache', {});
+                    ragClient.socket.emit('restore_chat', {
+                        chat_id: chatId,
+                        messages: chat.messages
+                    });
                 }
             }
         } catch (error) {
@@ -437,12 +440,6 @@ class SidebarManager {
         const messagesArea = document.getElementById('messages');
         messagesArea.innerHTML = `
             <div class="welcome">
-                <div class="welcome-icon">
-                    <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-                        <rect width="64" height="64" rx="16" fill="currentColor" opacity="0.06"/>
-                        <path d="M32 20v24M20 32h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
-                    </svg>
-                </div>
                 <h1 class="welcome-title">Ask anything</h1>
                 <p class="welcome-subtitle">Search through documents, retrieve information online, and use Advanced Reasoning for complex tasks</p>
                 <div class="capabilities">

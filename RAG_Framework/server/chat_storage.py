@@ -105,7 +105,7 @@ class ChatStorageManager:
 
     def delete_chat(self, chat_id: str) -> bool:
         """
-        Delete a chat by its ID.
+        Delete a chat by its ID, including its KV-cache file.
 
         Args:
             chat_id: The chat ID to delete
@@ -119,6 +119,10 @@ class ChatStorageManager:
 
         try:
             file_path.unlink()
+            # Also delete the KV-cache .safetensors file if it exists
+            cache_path = self.storage_dir / f"{chat_id}.safetensors"
+            if cache_path.exists():
+                cache_path.unlink()
             return True
         except IOError as e:
             print(f"Error deleting chat {chat_id}: {e}")

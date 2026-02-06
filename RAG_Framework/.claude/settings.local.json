@@ -9,7 +9,9 @@
       "Bash(pip3 search:*)",
       "WebFetch(domain:github.com)",
       "Bash(pip show:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(wc:*)",
+      "Bash(python:*)"
     ]
   }
 }

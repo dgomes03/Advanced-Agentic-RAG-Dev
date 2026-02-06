@@ -5,6 +5,7 @@ Handles query processing, tool call visualization, and advanced reasoning displa
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+from pathlib import Path
 import traceback
 
 from .chat_storage import get_chat_storage
@@ -97,9 +98,17 @@ def create_app(retriever, host='0.0.0.0', port=5050):
 
     @app.route('/api/chats/<chat_id>', methods=['DELETE'])
     def delete_chat(chat_id):
-        """Delete a conversation."""
+        """Delete a conversation and its KV-cache file."""
         storage = get_chat_storage()
         if storage.delete_chat(chat_id):
+            # Also delete the KV-cache file if it exists
+            cache_path = Path(__file__).parent / 'chats' / f"{chat_id}.safetensors"
+            if cache_path.exists():
+                try:
+                    cache_path.unlink()
+                    print(f"Deleted KV-cache file: {cache_path}")
+                except IOError as e:
+                    print(f"Failed to delete cache file {cache_path}: {e}")
             return jsonify({'success': True})
         return jsonify({'error': 'Chat not found'}), 404
 
@@ -157,13 +166,94 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                 gc.collect()
                 print("Prompt cache recreated")
 
+            # Reset tracked chat_id
+            rag_system.current_chat_id = None
+
             emit('status', {'state': 'connected', 'message': 'Conversation cleared - Ready for new conversation'})
         except Exception as e:
             print(f"Error clearing cache/conversation: {e}")
             # Try to at least clear conversation
             if hasattr(rag_system, 'conversation_manager'):
                 rag_system.conversation_manager.clear()
+            rag_system.current_chat_id = None
             emit('status', {'state': 'connected', 'message': 'Ready'})
+
+    @socketio.on('restore_chat')
+    def handle_restore_chat(data):
+        """
+        Restore a conversation's KV-cache and conversation manager from disk.
+        Called when the user loads a previous conversation in the sidebar.
+        """
+        chat_id = data.get('chat_id')
+        messages = data.get('messages', [])
+
+        print(f"\n{'='*60}")
+        print(f"Restoring conversation: {chat_id}")
+        print(f"{'='*60}\n")
+
+        try:
+            import gc
+            import json as _json
+            from mlx_lm.models.cache import make_prompt_cache, load_prompt_cache
+
+            chat_storage_dir = Path(__file__).parent / 'chats'
+            cache_path = chat_storage_dir / f"{chat_id}.safetensors"
+            saved_conversation = None
+
+            # Try to load cached KV-cache from disk
+            if cache_path.exists():
+                try:
+                    old_cache = getattr(rag_system, 'prompt_cache', None)
+                    loaded_cache, metadata = load_prompt_cache(str(cache_path), return_metadata=True)
+                    rag_system.prompt_cache = loaded_cache
+                    if old_cache is not None:
+                        del old_cache
+                    gc.collect()
+
+                    # Extract full conversation state from metadata
+                    conv_json = metadata.get("conversation")
+                    if conv_json:
+                        saved_conversation = _json.loads(conv_json)
+
+                    cache_offset = rag_system.prompt_cache[0].offset if rag_system.prompt_cache else 0
+                    print(f"KV-cache loaded from {cache_path} (offset={cache_offset})")
+                except Exception as e:
+                    print(f"Failed to load cache file (may be incompatible): {e}")
+                    rag_system.prompt_cache = make_prompt_cache(rag_system.llm_model)
+                    print("Created fresh prompt cache as fallback")
+            else:
+                # No cache file — create fresh (first query will prefill)
+                old_cache = getattr(rag_system, 'prompt_cache', None)
+                rag_system.prompt_cache = make_prompt_cache(rag_system.llm_model)
+                if old_cache is not None:
+                    del old_cache
+                gc.collect()
+                print(f"No cache file found, created fresh prompt cache")
+
+            # Restore conversation_manager:
+            # Prefer full conversation from cache metadata (includes tool calls/results)
+            # so the token sequence matches the saved KV-cache exactly.
+            # Fall back to UI messages if metadata is unavailable.
+            if hasattr(rag_system, 'conversation_manager'):
+                if saved_conversation:
+                    rag_system.conversation_manager.load_from_state(saved_conversation)
+                    print(f"Conversation restored from cache metadata ({len(saved_conversation)} entries)")
+                else:
+                    rag_system.conversation_manager.load_from_messages(messages)
+                    print(f"Conversation restored from UI messages ({len(messages)} messages, no cache metadata)")
+
+            # Track active chat_id for future cache saves
+            rag_system.current_chat_id = chat_id
+
+            emit('status', {'state': 'connected', 'message': 'Conversation restored'})
+        except Exception as e:
+            print(f"Error restoring conversation: {e}")
+            traceback.print_exc()
+            # Try to at least restore conversation manager
+            if hasattr(rag_system, 'conversation_manager'):
+                rag_system.conversation_manager.load_from_messages(messages)
+            rag_system.current_chat_id = chat_id
+            emit('status', {'state': 'connected', 'message': 'Conversation restored (without cache)'})
 
     @socketio.on('save_chat')
     def handle_save_chat(data):
@@ -181,6 +271,7 @@ def create_app(retriever, host='0.0.0.0', port=5050):
             # Update existing chat
             chat = storage.update_chat(chat_id, messages, title)
             if chat:
+                rag_system.current_chat_id = chat_id
                 emit('chat_saved', {'chat_id': chat_id, 'chat': chat})
             else:
                 emit('error', {'message': 'Failed to save chat'})
@@ -188,6 +279,7 @@ def create_app(retriever, host='0.0.0.0', port=5050):
             # Create new chat
             chat = storage.create_chat(title=title)
             chat = storage.update_chat(chat['id'], messages, title)
+            rag_system.current_chat_id = chat['id']
             emit('chat_saved', {'chat_id': chat['id'], 'chat': chat, 'is_new': True})
 
     @socketio.on('load_chat')
@@ -282,6 +374,7 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                     stream_callback=stream_callback,
                     verbose=False,
                     conversation_manager=conversation_manager
+                
                 )
 
             # Handle response (could be tuple or string)
@@ -293,6 +386,27 @@ def create_app(retriever, host='0.0.0.0', port=5050):
             # Emit completion
             emit('done', {'message_id': message_id})
             print(f"\nQuery processed successfully. Message ID: {message_id}")
+            print(f"\nQuery: {query}")
+            print(f"Final response:{response_text}\n")
+
+            # Save KV-cache to disk for this conversation
+            # Include full conversation state as metadata so the cache
+            # can be restored with the exact token sequence it was built from
+            chat_id = getattr(rag_system, 'current_chat_id', None)
+            if chat_id and prompt_cache:
+                try:
+                    import json as _json
+                    from mlx_lm.models.cache import save_prompt_cache
+                    cache_path = str(Path(__file__).parent / 'chats' / f"{chat_id}.safetensors")
+                    metadata = {}
+                    if conversation_manager:
+                        metadata["conversation"] = _json.dumps(
+                            conversation_manager.get_conversation(), ensure_ascii=False
+                        )
+                    save_prompt_cache(cache_path, prompt_cache, metadata)
+                    print(f"KV-cache saved to {cache_path}")
+                except Exception as e:
+                    print(f"Failed to save KV-cache: {e}")
 
         except Exception as e:
             # Emit error to client

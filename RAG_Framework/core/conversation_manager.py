@@ -20,21 +20,10 @@ class ConversationManager:
         "End informative responses by offering to elaborate.\n"
         "When searching google, cite your sources.\n"
         "When multiple tools are necessary, use one at a time.\n"
-        "After each tool call, analyze its results and respond to the user before proceeding.\n\n"
-        """The name of the user is Diogo.
-        Diogo is a data science master's student working on his thesis titled "An Efficient and Modular Framework for Advanced Agentic Retrieval-Augmented Generation." He demonstrates deep expertise in machine learning and AI systems, particularly in developing sophisticated RAG frameworks with agentic capabilities including multi-step reasoning, self-evaluation, and dynamic replanning. His technical work spans fire behavior prediction modeling, geospatial analysis, and advanced ML model development using XGBoost, neural networks, and feature engineering techniques.
-        Personal context
-        Diogo is passionate about Apple products and has profound tech knowledge across multiple domains. He enjoys design work and hosts a weekly podcast, demonstrating strong communication skills and creative interests. He runs local large language models on a Mac mini, where he performs fine-tuning and quantization using MLX, Apple's machine learning framework, showing his preference for cutting-edge local AI deployment over cloud-based solutions.
-        Top of mind
-        Diogo is actively working on fitness and body recomposition goals, having recently adjusted his nutrition from severe under-eating (1,500 calories) to a proper 2,000-calorie intake while maintaining his training regimen of 5-6 weekly lifting sessions and 25km of running. He's been troubleshooting technical issues with his advanced RAG system, particularly around tool calling format changes in Mistral models and implementing real-time neural network activation visualizations. His thesis work involves creating modular frameworks for agentic RAG systems with sophisticated retrieval, reranking, and generation components.
-        Brief history
-        Recent months
-        Diogo has been deeply engaged in developing his thesis project on agentic RAG frameworks, implementing complex systems with MLX for local inference, FAISS for dense retrieval, BM25 for sparse retrieval, and cross-encoder reranking. He's worked extensively on fire behavior prediction models using XGBoost and machine learning techniques, processing Portuguese wildfire datasets and implementing SHAP analysis for model interpretability. His technical work has included debugging complex data pipelines, optimizing hyperparameters, and creating comprehensive evaluation frameworks. He's also been involved in hackathon projects, developing web applications for fire prediction with Flask backends and interactive frontends.
-        Earlier context
-        Diogo has demonstrated consistent interest in advanced machine learning applications, working with geospatial data analysis, time series modeling, and statistical analysis. He's developed expertise in data visualization, feature engineering, and model optimization techniques. His work has involved processing large datasets, implementing cross-validation strategies, and creating sophisticated data preprocessing pipelines. He's shown particular interest in Apple ecosystem tools and technologies, consistently working within macOS environments and leveraging Apple Silicon capabilities for machine learning tasks.
-        Long-term background
-        Diogo has established himself as someone with deep technical knowledge spanning multiple domains including machine learning, data science, web development, and system optimization. His academic background in data science, combined with his practical experience in podcast hosting and design work, reflects a well-rounded technical professional with strong communication skills and creative interests."""
-        "\n\nBe objective and concise."
+        "After each tool call, analyze its results and respond to the user before proceeding."
+        "\nBe objective and concise."
+        "\nIf a tool is not providing the information you need, try a different tool or ask the user for clarification instead of making assumptions."
+        "\nIf the user speaks Portuguese, respond in Portugese of Portugal. If the user speaks English, respond in English."
     )
 
     def __init__(self, system_prompt: str = None):
@@ -86,6 +75,26 @@ class ConversationManager:
             "content": content,
             "tool_call_id": tool_call_id
         })
+
+    def load_from_messages(self, messages: list):
+        """Restore conversation from saved messages (user/assistant only).
+        Note: This loses tool call/result messages, which invalidates the KV-cache.
+        Prefer load_from_state() when restoring alongside a saved cache.
+        """
+        self.clear()
+        for msg in messages:
+            role = msg.get('role')
+            content = msg.get('content', '')
+            if role == 'user':
+                self.add_user_message(content)
+            elif role == 'assistant':
+                self.add_assistant_message(content)
+
+    def load_from_state(self, conversation: list):
+        """Restore full conversation state including tool calls and results.
+        This preserves the exact token sequence the KV-cache was built from.
+        """
+        self.conversation = conversation
 
     def get_conversation(self) -> list:
         """Return the full conversation history."""
