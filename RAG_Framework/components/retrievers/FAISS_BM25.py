@@ -291,6 +291,63 @@ class Retriever:
             final_context = "\n---\n".join([chunk for chunk, _ in reranked])
         return final_context
 
+    def combined_retrieval_with_chunks(
+            self,
+            query,
+            k=RETRIEVAL_TOP_K,
+            weight_dense=0.6,
+            weight_sparse=0.4,
+            rerank_top_n=RERANKER_TOP_N,
+    ):
+        """Same as combined_retrieval but returns (context_string, individual_chunks_list)."""
+        if not self.faiss_index or not self.bm25 or not self.multi_vector_index:
+            return "No documents available for retrieval.", []
+
+        expanded_queries = [query] + self.expand_query(query)
+
+        dense_scores = defaultdict(float)
+        prefixed_queries = [
+            prepare_for_embedding(q, is_query=True, use_prefix=EMBEDDING_USE_PREFIX)
+            for q in expanded_queries
+        ]
+        query_embeddings = self.embedding_model.encode(prefixed_queries)
+        for query_emb in query_embeddings:
+            faiss_results = self.retrieve_with_faiss(query_emb, self.faiss_index, k=k)
+            for idx, score in faiss_results:
+                dense_scores[idx] += score
+        dense_scores_norm = self.normalize_scores(dense_scores)
+
+        sparse_scores = defaultdict(float)
+        for exp_query in expanded_queries:
+            tokenized_query = tokenize_for_bm25(
+                exp_query,
+                enable_stemming=BM25_ENABLE_STEMMING,
+                enable_stopwords=BM25_ENABLE_STOPWORDS,
+                languages=BM25_LANGUAGES
+            )
+            bm25_results = self.retrieve_with_bm25(tokenized_query, self.bm25, top_k=k)
+            for idx, score in bm25_results:
+                sparse_scores[idx] += score
+        sparse_scores_norm = self.normalize_scores(sparse_scores)
+
+        all_doc_indices = set(dense_scores_norm.keys()) | set(sparse_scores_norm.keys())
+        combined_scores = {}
+        for idx in all_doc_indices:
+            dscore = dense_scores_norm.get(idx, 0)
+            sscore = sparse_scores_norm.get(idx, 0)
+            combined_scores[idx] = weight_dense * dscore + weight_sparse * sscore
+
+        top_indices = sorted(combined_scores, key=combined_scores.get, reverse=True)[:k]
+        retrieved_chunks = [self.multi_vector_index[idx]["text"] for idx in top_indices]
+        retrieved_metadata = [self.multi_vector_index[idx]["metadata"] for idx in top_indices]
+
+        reranked = self.rerank_chunks_with_metadata(query, retrieved_chunks, retrieved_metadata, top_n=rerank_top_n)
+        self.last_retrieved_metadata = [meta for _, meta in reranked]
+
+        chunks_list = [chunk for chunk, _ in reranked]
+        context_string = "\n---\n".join(chunks_list)
+        return context_string, chunks_list
+
     def search_documents_tool(self, query: str) -> str:
         """Tool for semantic search across all documents"""
         try:

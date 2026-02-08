@@ -13,7 +13,10 @@
       "Bash(wc:*)",
       "Bash(python:*)",
       "Bash(find:*)",
-      "Bash(PYTHONPATH=\"/Users/diogogomes/Documents/Uni/Tese Mestrado:$PYTHONPATH\" python3:*)"
+      "Bash(PYTHONPATH=\"/Users/diogogomes/Documents/Uni/Tese Mestrado:$PYTHONPATH\" python3:*)",
+      "WebFetch(domain:docs.ragas.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(/opt/anaconda3/envs/RAG/bin/python:*)"
     ]
   }
 }

@@ -16,7 +16,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "search_documents",
-                    "description": "Searches user's documents for text chunks relevant to the user's query.",
+                    "description": "Searches user's documents for information to respond to the user's query.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -66,7 +66,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "search_wikipedia",
-                    "description": "Search Wikipedia for factual information and general knowledge.",
+                    "description": "Searches Wikipedia for encyclopedic information on a given topic.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -80,7 +80,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "google_custom_search",
-                    "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                    "description": "Search the internet using Google. Use for current events or general knowledge.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -94,7 +94,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "duckduckgo_search",
-                    "description": "Search the web using DuckDuckGo. Returns titles, snippets, and URLs. Use fetch_url_content to get full page content from promising results.",
+                    "description": "Search the web using DuckDuckGo. Use for current events or general knowledge.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -109,7 +109,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "fetch_url_content",
-                    "description": "Fetch and extract the main text content from a web page. Use after duckduckgo_search or google_custom_search to get full article content instead of just snippets.",
+                    "description": "Fetch and extract the main text content from a web page. Use after duckduckgo_search or google_custom_search to get full webpage content.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -124,7 +124,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "query_database",
-                    "description": "Execute a read-only SQL SELECT query on a configured database. Only SELECT queries are allowed. Use list_databases to see available databases and get_database_schema to understand the table structure before querying.",
+                    "description": "Execute a read-only SQL SELECT query on a configured database. Only SELECT queries are allowed.",
                     "parameters": {
                         "type": "object",
                         "properties": {

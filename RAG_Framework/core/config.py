@@ -79,3 +79,11 @@ SQL_DATABASE_CONFIGS = {
         "allowed_tables": ["products", "customers", "orders"],
     }
 }
+
+# === RAGAS Evaluation Configuration ===
+EVAL_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "RAG_Framework", "evaluation", "results")
+EVAL_BENCHMARK_DATASET = "explodinggradients/amnesty_qa"
+EVAL_BENCHMARK_DATASET_SUBSET = "english_v3"
+EVAL_MAX_QUESTIONS = None  # None = all, or int to limit
+EVAL_LLM_MAX_TOKENS = 2048
+EVAL_LLM_TEMPERATURE = 0.1
