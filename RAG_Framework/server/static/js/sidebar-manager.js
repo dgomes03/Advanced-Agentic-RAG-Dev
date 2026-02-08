@@ -425,6 +425,8 @@ class SidebarManager {
             } else if (el.classList.contains('message-assistant')) {
                 // Get raw text if available, otherwise get text content
                 text = content.getAttribute('data-raw-text') || content.textContent || '';
+                // Clean any leaked tool call syntax before saving
+                text = MarkdownRenderer.removeToolCallSyntax(text).trim();
                 if (text) {
                     messages.push({ role: 'assistant', content: text });
                 }

@@ -7,7 +7,7 @@ from mlx_lm import generate
 
 from RAG_Framework.core.config import (
     BM25_ENABLE_STEMMING, BM25_ENABLE_STOPWORDS, BM25_LANGUAGES,
-    EMBEDDING_USE_PREFIX
+    EMBEDDING_USE_PREFIX, RETRIEVAL_TOP_K, RERANKER_TOP_N
 )
 from RAG_Framework.core.text_processing import tokenize_for_bm25, prepare_for_embedding
 
@@ -88,6 +88,15 @@ class Retriever:
     def metadata_index(self):
         self._ensure_indices_loaded()
         return self._metadata_index
+
+    def update_indices(self, multi_vector_index, bm25, metadata_index, faiss_index):
+        """Thread-safe swap of all in-memory indices."""
+        with self._load_lock:
+            self._multi_vector_index = multi_vector_index
+            self._bm25 = bm25
+            self._metadata_index = metadata_index
+            self._faiss_index = faiss_index
+            self._indices_loaded = True
 
     @staticmethod
     def normalize_scores(scores):
@@ -211,10 +220,10 @@ class Retriever:
     def combined_retrieval(
             self,
             query,
-            k=7,
+            k=RETRIEVAL_TOP_K,
             weight_dense=0.6,
             weight_sparse=0.4,
-            rerank_top_n=5,
+            rerank_top_n=RERANKER_TOP_N,
             use_summarization=False,
     ):
         if not self.faiss_index or not self.bm25 or not self.multi_vector_index:
@@ -287,10 +296,8 @@ class Retriever:
         try:
             return self.combined_retrieval(
                 query=query,
-                k=20, # ADDED: Reduced k for initial retrieval
                 weight_dense=0.6,
                 weight_sparse=0.4,
-                rerank_top_n=10,
                 use_summarization=False
             )
         except Exception as e:

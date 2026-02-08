@@ -55,6 +55,10 @@ class RAGWebSocketClient {
         this.socket.on('status', (data) => this.onStatus(data));
         this.socket.on('done', (data) => this.onDone(data));
         this.socket.on('error', (data) => this.onError(data));
+
+        // Server shutdown/restart events
+        this.socket.on('server_shutdown', (data) => this.onServerShutdown(data));
+        this.socket.on('server_restart', (data) => this.onServerRestart(data));
     }
 
     /**
@@ -287,6 +291,77 @@ class RAGWebSocketClient {
         this.isProcessing = false;
         this.updateStatusIndicator('error', 'Error occurred');
         this.updateSendButton(true);
+    }
+
+    /**
+     * Handle server shutdown
+     */
+    onServerShutdown(data) {
+        console.log('Server shutting down:', data);
+        this.isProcessing = false;
+        this.updateStatusIndicator('error', 'Server stopped');
+        this.updateSendButton(false);
+
+        // Remove the assistant message placeholder that was created for the "exit" query
+        if (this.currentMessageId) {
+            const messageContent = document.querySelector(`[data-message-id="${this.currentMessageId}"]`);
+            if (messageContent) {
+                const assistantMsg = messageContent.closest('.message.assistant');
+                if (assistantMsg) assistantMsg.remove();
+            }
+        }
+    }
+
+    /**
+     * Handle server restart
+     */
+    onServerRestart(data) {
+        console.log('Server restarting:', data);
+        this.isProcessing = false;
+        this.updateStatusIndicator('connecting', 'Restarting...');
+        this.updateSendButton(false);
+
+        // Remove the assistant message placeholder that was created for the "restart" query
+        if (this.currentMessageId) {
+            const messageContent = document.querySelector(`[data-message-id="${this.currentMessageId}"]`);
+            if (messageContent) {
+                const assistantMsg = messageContent.closest('.message.assistant');
+                if (assistantMsg) assistantMsg.remove();
+            }
+        }
+
+        // Disconnect current socket and reconnect after the server comes back up
+        this.socket.disconnect();
+        this.waitForRestart();
+    }
+
+    /**
+     * Poll the server until it's back up, then reconnect
+     */
+    waitForRestart() {
+        const maxAttempts = 60;
+        let attempts = 0;
+
+        const poll = setInterval(() => {
+            attempts++;
+            fetch('/status')
+                .then(res => {
+                    if (res.ok) {
+                        clearInterval(poll);
+                        console.log('Server is back up, reconnecting...');
+                        this.socket.connect();
+                    }
+                })
+                .catch(() => {
+                    // Server still down, keep polling
+                    this.updateStatusIndicator('connecting', `Restarting... (${attempts}s)`);
+                });
+
+            if (attempts >= maxAttempts) {
+                clearInterval(poll);
+                this.updateStatusIndicator('error', 'Restart timed out');
+            }
+        }, 1000);
     }
 
     /**

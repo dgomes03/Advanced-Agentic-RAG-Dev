@@ -10,26 +10,80 @@ class MarkdownRenderer {
         // 1. Remove tool call syntax
         let html = this.removeToolCallSyntax(text);
 
-        // 2. Protect LaTeX math before marked processes it
+        // 2. Fix headings missing space after # (e.g. ###Title -> ### Title)
+        html = html.replace(/^(#{1,6})([^\s#])/gm, '$1 $2');
+
+        // 3. Protect LaTeX math before marked processes it
         const mathPlaceholders = [];
         html = this.extractMath(html, mathPlaceholders);
 
-        // 3. Use marked.js for markdown -> HTML
+        // 4. Use marked.js for markdown -> HTML
         html = marked.parse(html, {
             gfm: true,        // GitHub Flavored Markdown (tables, etc)
             breaks: true,     // Convert \n to <br>
         });
 
-        // 4. Restore math placeholders
+        // 5. Restore math placeholders
         html = this.restoreMath(html, mathPlaceholders);
 
         return html;
     }
 
     static removeToolCallSyntax(text) {
-        // Remove [TOOL_CALLS]...[ARGS]{...} patterns
-        return text.replace(/\[TOOL_CALLS\][^\[]*\[ARGS\]\{[^}]*\}/g, '\n\n')
-                   .replace(/\n{3,}/g, '\n\n');
+        // Remove tool call patterns with proper brace matching:
+        //   New format: [TOOL_CALLS]name[ARGS]{...}
+        //   Old format: [TOOL_CALLS][{...}]
+        //   Partial patterns during streaming
+        let result = text;
+
+        while (result.includes('[TOOL_CALLS]')) {
+            const start = result.indexOf('[TOOL_CALLS]');
+            const afterMarker = result.substring(start + 12);
+            const argsIdx = afterMarker.indexOf('[ARGS]');
+
+            if (argsIdx === -1) {
+                // No [ARGS] — check for old format [TOOL_CALLS][{...}]
+                if (afterMarker.startsWith('[')) {
+                    let depth = 0, end = -1;
+                    for (let i = 0; i < afterMarker.length; i++) {
+                        if (afterMarker[i] === '[') depth++;
+                        else if (afterMarker[i] === ']') { depth--; if (depth === 0) { end = i + 1; break; } }
+                    }
+                    if (end > 0) { result = result.substring(0, start) + result.substring(start + 12 + end); continue; }
+                }
+                // Partial pattern (streaming) — strip from marker to end
+                result = result.substring(0, start);
+                continue;
+            }
+
+            // Find JSON object after [ARGS] (skip garbage text before '{')
+            const afterArgs = afterMarker.substring(argsIdx + 6);
+            const braceIdx = afterArgs.indexOf('{');
+
+            if (braceIdx === -1) {
+                result = result.substring(0, start);
+                continue;
+            }
+
+            // Match balanced braces to find end of JSON
+            let depth = 0, jsonEnd = -1;
+            for (let i = braceIdx; i < afterArgs.length; i++) {
+                if (afterArgs[i] === '{') depth++;
+                else if (afterArgs[i] === '}') { depth--; if (depth === 0) { jsonEnd = i + 1; break; } }
+            }
+
+            if (jsonEnd === -1) {
+                // Unbalanced braces (still streaming) — strip to end
+                result = result.substring(0, start);
+                continue;
+            }
+
+            // Remove the complete tool call pattern
+            const endInResult = start + 12 + argsIdx + 6 + jsonEnd;
+            result = result.substring(0, start) + result.substring(endInResult);
+        }
+
+        return result.replace(/\n{3,}/g, '\n\n');
     }
 
     static extractMath(text, placeholders) {
@@ -43,14 +97,17 @@ class MarkdownRenderer {
             return `MATHPLACEHOLDER_D_${placeholders.length - 1}_END`;
         });
 
-        // Inline math: $...$ or \(...\) (skip currency like $100)
+        // Inline math: $...$ or \(...\)
         text = text.replace(/\\\(([\s\S]*?)\\\)/g, (m, math) => {
             placeholders.push({ type: 'inline', math: math.trim() });
             return `MATHPLACEHOLDER_I_${placeholders.length - 1}_END`;
         });
-        text = text.replace(/\$([^$\n]+)\$/g, (m, math) => {
-            if (/^\d+([.,]\d+)?$/.test(math.trim())) return m; // currency
-            placeholders.push({ type: 'inline', math: math.trim() });
+        // $...$ with guards: cap length, skip currency ($44, $3.50, $44 billion)
+        text = text.replace(/\$([^$\n]{1,100})\$/g, (m, math) => {
+            const trimmed = math.trim();
+            if (!trimmed) return m;
+            if (/^\d/.test(trimmed) && !/[\\^_{}]/.test(trimmed)) return m; // currency unless it has LaTeX chars
+            placeholders.push({ type: 'inline', math: trimmed });
             return `MATHPLACEHOLDER_I_${placeholders.length - 1}_END`;
         });
 

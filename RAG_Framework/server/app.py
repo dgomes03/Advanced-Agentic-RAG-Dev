@@ -316,6 +316,39 @@ def create_app(retriever, host='0.0.0.0', port=5050):
             emit('error', {'message': 'No query provided'})
             return
 
+        # Handle exit command - shut down the server
+        if query.strip().lower() == 'exit':
+            print("\nExit command received from client. Shutting down server...")
+            emit('server_shutdown', {'message': 'Server is shutting down...'})
+            import threading
+            def shutdown():
+                import time
+                time.sleep(0.5)
+                import os, signal
+                os.kill(os.getpid(), signal.SIGINT)
+            threading.Thread(target=shutdown, daemon=True).start()
+            return
+
+        # Handle restart command - restart the entire RAG process
+        if query.strip().lower() == 'restart':
+            print("\nRestart command received from client. Restarting server...")
+            emit('server_restart', {'message': 'Server is restarting...'})
+            import threading, sys
+            def restart():
+                import time, os, stat
+                time.sleep(0.5)
+                # Close only socket FDs to release the port,
+                # leaving regular file FDs intact so Python can exec
+                for fd in range(3, 256):
+                    try:
+                        if stat.S_ISSOCK(os.fstat(fd).st_mode):
+                            os.close(fd)
+                    except OSError:
+                        pass
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            threading.Thread(target=restart, daemon=True).start()
+            return
+
         print(f"\n{'='*60}")
         print(f"Processing query: {query}")
         print(f"Message ID: {message_id}")
@@ -385,9 +418,7 @@ def create_app(retriever, host='0.0.0.0', port=5050):
 
             # Emit completion
             emit('done', {'message_id': message_id})
-            print(f"\nQuery processed successfully. Message ID: {message_id}")
-            print(f"\nQuery: {query}")
-            print(f"Final response:{response_text}\n")
+            print(f"\nResponse complete. (Message ID: {message_id})")
 
             # Save KV-cache to disk for this conversation
             # Include full conversation state as metadata so the cache

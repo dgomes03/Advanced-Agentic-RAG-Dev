@@ -18,14 +18,11 @@ class ConversationManager:
         "Base answers strictly on tool results.\n"
         "If insufficient information is found, inform the user.\n"
         "End informative responses by offering to elaborate.\n"
-        "When searching google, cite your sources.\n"
-        "When multiple tools are necessary, use one at a time.\n"
-        "After each tool call, analyze its results and respond to the user before proceeding."
+        "When searching the web, cite your sources.\n"
         "\nBe objective and concise."
         "\nIf a tool is not providing the information you need, try a different tool or ask the user for clarification instead of making assumptions."
-        "\nIf the user speaks Portuguese, respond in Portugese of Portugal. If the user speaks English, respond in English."
     )
-
+    
     def __init__(self, system_prompt: str = None):
         """
         Initialize the conversation manager.

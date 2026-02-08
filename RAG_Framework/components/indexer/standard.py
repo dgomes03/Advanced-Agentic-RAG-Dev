@@ -404,6 +404,119 @@ class Indexer:
                 results.append(multi_vector_index[idx])
         return results
 
+    def index_new_documents(self, multi_vector_index, bm25, metadata_index, faiss_index, embedding_model):
+        """
+        Detect new PDFs in DOCUMENTS_DIR, process only those, and merge into existing indices.
+
+        Args:
+            multi_vector_index: Existing multi-vector index (list of dicts)
+            bm25: Existing BM25 index
+            metadata_index: Existing metadata index (dict mapping doc names to chunk indices)
+            faiss_index: Existing FAISS index
+            embedding_model: Loaded SentenceTransformer model
+
+        Returns:
+            Tuple of (multi_vector_index, bm25, metadata_index, faiss_index, new_filenames)
+            or None if no new documents were found.
+        """
+        # List all PDFs in the documents directory
+        all_pdfs = [f for f in os.listdir(self.documents_dir) if f.lower().endswith('.pdf')]
+
+        # Determine which are already indexed by checking metadata_index keys
+        indexed_filenames = set()
+        for key in metadata_index:
+            if key.endswith('.pdf'):
+                indexed_filenames.add(key)
+
+        new_filenames = [f for f in all_pdfs if f not in indexed_filenames]
+
+        if not new_filenames:
+            return None
+
+        print(f"New documents detected: {new_filenames}")
+
+        # Build file_infos for new PDFs only
+        max_chunk_length = CHUNK_SIZE
+        chunk_overlap = CHUNK_OVERLAP
+        existing_doc_count = len(indexed_filenames)
+
+        file_infos = [
+            (
+                os.path.join(self.documents_dir, f),
+                existing_doc_count + i,
+                max_chunk_length,
+                chunk_overlap,
+                self.enable_ocr,
+                self.ocr_min_width,
+                self.ocr_min_height,
+                self.ocr_resolution
+            )
+            for i, f in enumerate(new_filenames)
+        ]
+
+        # Process new PDFs in parallel
+        num_processes = max(1, min(cpu_count() - 1, 8))
+        print(f"Processing {len(new_filenames)} new document(s) with {num_processes} processes...")
+
+        with Pool(processes=num_processes) as pool:
+            results = list(tqdm(
+                pool.imap(self.process_single_pdf, file_infos),
+                total=len(file_infos),
+                desc="Processing new PDFs"
+            ))
+
+        new_chunks = []
+        new_metadata = []
+        for chunks, metadata in results:
+            new_chunks.extend(chunks)
+            new_metadata.extend(metadata)
+
+        if not new_chunks:
+            print("No content extracted from new documents.")
+            return None
+
+        print(f"Extracted {len(new_chunks)} chunks from {len(new_filenames)} new document(s)")
+
+        # Generate embeddings for new chunks only
+        print("Generating embeddings for new chunks...")
+        new_embeddings = self.get_embeddings(new_chunks, model=embedding_model)
+
+        # Calculate offset for new chunk indices
+        offset = len(multi_vector_index)
+
+        # Extend multi_vector_index
+        new_entries = self.build_multi_vector_index(new_embeddings, new_metadata, new_chunks)
+        multi_vector_index.extend(new_entries)
+
+        # Add new vectors to FAISS index
+        embeddings_array = np.array([item["embedding"] for item in new_entries]).astype('float32')
+        faiss.normalize_L2(embeddings_array)
+        faiss_index.add(embeddings_array)
+
+        # Rebuild BM25 from all texts (fast — just tokenization)
+        all_texts = [item["text"] for item in multi_vector_index]
+        bm25 = self.build_bm25_index(all_texts)
+
+        # Update metadata_index with new entries
+        for idx, meta in enumerate(new_metadata):
+            doc_name = meta.get('document_name')
+            full_doc_id = meta.get('full_document_id')
+            global_idx = offset + idx
+            if doc_name:
+                if doc_name not in metadata_index:
+                    metadata_index[doc_name] = []
+                metadata_index[doc_name].append(global_idx)
+            if full_doc_id:
+                if full_doc_id not in metadata_index:
+                    metadata_index[full_doc_id] = []
+                metadata_index[full_doc_id].append(global_idx)
+
+        # Save updated indices to disk
+        self.save_indices(multi_vector_index, bm25, metadata_index, faiss_index)
+        print(f"Indices updated and saved. Total chunks: {len(multi_vector_index)}")
+
+        return multi_vector_index, bm25, metadata_index, faiss_index, new_filenames
+
     def load_and_content_chunk_pdfs_parallel(self, max_chunk_length=None, chunk_overlap=None):
         """Load and process PDF documents in parallel"""
         # Use config defaults if not specified

@@ -12,14 +12,15 @@ from mlx_lm.models.cache import make_prompt_cache
 from RAG_Framework.core.config import (
     EMBEDDING_MODEL_NAME, MODEL_PATH, RERANKER_MODEL_NAME,
     ENABLE_SERVER, SERVER_HOST, SERVER_PORT, EVAL, num_threads,
-    ADVANCED_REASONING, ENABLE_SQL_DATABASES, SQL_DATABASE_CONFIGS
+    ADVANCED_REASONING, ENABLE_SQL_DATABASES, SQL_DATABASE_CONFIGS,
+    CHECK_NEW_DOCUMENTS_ON_START
 )
 
 torch.set_num_threads(int(num_threads))
 torch.set_num_interop_threads(int(num_threads))
 faiss.omp_set_num_threads(int(num_threads))
 
-from RAG_Framework.components.indexer import Indexer
+from RAG_Framework.components.indexer import Indexer, start_document_check
 from RAG_Framework.components.retrievers import Retriever
 from RAG_Framework.components.generators import Generator
 from RAG_Framework.core.conversation_manager import ConversationManager
@@ -89,6 +90,10 @@ if __name__ == "__main__":
     ############################# oq é q isto faz? ###############################################################################
     retriever.prompt_cache = prompt_cache
     retriever.conversation_manager = conversation_manager
+
+    # Check for new documents in background (one-shot, non-blocking)
+    if CHECK_NEW_DOCUMENTS_ON_START:
+        start_document_check(retriever)
 
     # Initialize SQL databases if enabled
     if ENABLE_SQL_DATABASES and SQL_DATABASE_CONFIGS:

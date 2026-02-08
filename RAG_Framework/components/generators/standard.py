@@ -44,9 +44,13 @@ class Generator:
             # Track what we've already emitted
             last_pos = 0
             generation_complete = False
+            pending_buffer = ""
+            tool_call_found = False
+            TOOL_MARKER = '[TOOL_CALLS]'
+            TOOL_MARKER_LEN = len(TOOL_MARKER)
 
             def monitor_output():
-                nonlocal last_pos, generation_complete
+                nonlocal last_pos, generation_complete, pending_buffer, tool_call_found
                 while not generation_complete:
                     # Get current output
                     current_output = captured_output.getvalue()
@@ -55,6 +59,11 @@ class Generator:
                     if len(current_output) > last_pos:
                         new_content = current_output[last_pos:]
                         last_pos = len(current_output)
+
+                        # Skip emitting once a tool call is detected
+                        if tool_call_found:
+                            time.sleep(0.01)
+                            continue
 
                         # Filter out verbose stats lines (Prompt:, Generation:, Peak memory:, =====)
                         if not verbose and stream_callback:
@@ -65,9 +74,24 @@ class Generator:
                                     lines_to_emit.append(line)
                             new_content = '\n'.join(lines_to_emit)
 
-                        # Emit the new token(s)
-                        if stream_callback and new_content.strip():
-                            stream_callback('text_chunk', {'text': new_content})
+                        # Buffer content and check for [TOOL_CALLS] marker before emitting
+                        pending_buffer += new_content
+                        marker_idx = pending_buffer.find(TOOL_MARKER)
+
+                        if marker_idx >= 0:
+                            # Tool call detected - only emit text before the marker
+                            tool_call_found = True
+                            to_emit = pending_buffer[:marker_idx]
+                            if stream_callback and to_emit.strip():
+                                stream_callback('text_chunk', {'text': to_emit})
+                            pending_buffer = ""
+                        elif len(pending_buffer) > TOOL_MARKER_LEN:
+                            # No marker yet - emit safe portion, keep tail buffered
+                            # to catch markers that span across chunks
+                            safe = pending_buffer[:-TOOL_MARKER_LEN]
+                            pending_buffer = pending_buffer[-TOOL_MARKER_LEN:]
+                            if stream_callback and safe.strip():
+                                stream_callback('text_chunk', {'text': safe})
 
                     # Small delay to avoid busy waiting
                     time.sleep(0.01)
@@ -95,19 +119,26 @@ class Generator:
 
             # Emit any remaining content
             final_output = captured_output.getvalue()
-            if len(final_output) > last_pos:
-                remaining = final_output[last_pos:]
+            remaining_new = final_output[last_pos:] if len(final_output) > last_pos else ""
 
+            if not tool_call_found:
                 # Filter out verbose stats lines if needed
-                if not verbose and stream_callback:
+                if not verbose and stream_callback and remaining_new:
                     lines_to_emit = []
-                    for line in remaining.split('\n'):
+                    for line in remaining_new.split('\n'):
                         if not any(marker in line for marker in ['Prompt:', 'Generation:', 'Peak memory:', '====', 'tokens-per-sec']):
                             lines_to_emit.append(line)
-                    remaining = '\n'.join(lines_to_emit)
+                    remaining_new = '\n'.join(lines_to_emit)
 
-                if remaining.strip():
-                    stream_callback('text_chunk', {'text': remaining})
+                # Flush pending buffer + remaining, checking for tool call marker
+                pending_buffer += remaining_new
+                marker_idx = pending_buffer.find(TOOL_MARKER)
+                if marker_idx >= 0:
+                    to_emit = pending_buffer[:marker_idx]
+                else:
+                    to_emit = pending_buffer
+                if stream_callback and to_emit.strip():
+                    stream_callback('text_chunk', {'text': to_emit})
 
             return result
 
@@ -305,7 +336,20 @@ class Generator:
         # Get the conversation for use in the loop
         conversation = conversation_manager.get_conversation()
 
+        # Save cache checkpoint before this query so we can restore it
+        # between tool call iterations (each iteration's generated tokens
+        # would corrupt the cache prefix for the next iteration)
+        pre_query_checkpoint = CacheManager.get_checkpoint(prompt_cache)
+        is_tool_call_continuation = False
+
         while True:
+            # After a tool call iteration, restore cache to pre-query state.
+            # The generated response tokens don't match what the chat template
+            # produces for the tool call/result entries, so the cache prefix
+            # would be invalid for the next iteration.
+            if is_tool_call_continuation:
+                CacheManager.restore_checkpoint(prompt_cache, pre_query_checkpoint)
+
             prompt = llm_tokenizer.apply_chat_template(
                 conversation,
                 add_generation_prompt=True,
@@ -326,11 +370,14 @@ class Generator:
             if cache_offset > 0 and cache_offset < len(full_tokens):
                 # Pass only the suffix tokens that aren't cached
                 prompt_tokens = full_tokens[cache_offset:]
-                #print(f"[KV-Cache] Reusing {cache_offset} cached tokens, processing {len(prompt_tokens)} new tokens")
             else:
                 prompt_tokens = full_tokens
                 if cache_offset > 0:
-                    print(f"\n[KV-Cache] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), processing full prompt")
+                    # Cache doesn't match prompt — reset it before generating
+                    print(f"\n[KV-Cache] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), resetting cache")
+                    for layer in prompt_cache:
+                        if layer.offset > 0:
+                            layer.trim(layer.offset)
 
             response = Generator._generate_with_streaming(
                 model=llm_model,
@@ -548,6 +595,7 @@ class Generator:
 
                     print("All tool executions completed. Preparing final response...")
                     # Continue to next iteration to generate final response
+                    is_tool_call_continuation = True
                     continue
                 except Exception as e:
                     print(f"Error processing tool calls: {str(e)}")

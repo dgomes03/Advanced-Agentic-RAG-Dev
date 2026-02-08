@@ -31,12 +31,16 @@ EVAL = False
 # === Chunking Configuration ===
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 128  # 25% overlap to preserve boundary information
-PARENT_CHUNK_SIZE = 2048  # For hierarchical indexing (future use)
+PARENT_CHUNK_SIZE = 2048  # For hierarchical indexing (future use) TODO: Implement hierarchical indexing with parent chunks
 
 # === BM25 Configuration ===
 BM25_ENABLE_STEMMING = True
 BM25_ENABLE_STOPWORDS = True
 BM25_LANGUAGES = ['english', 'portuguese']  # Languages for stemmer and stop words
+
+# === Retrieval Configuration ===
+RETRIEVAL_TOP_K = 40        # Number of candidates retrieved from FAISS + BM25
+RERANKER_TOP_N = 20         # Number of results kept after reranking
 
 # === FAISS Configuration ===
 FAISS_INDEX_TYPE = 'auto'  # Options: 'flat', 'ivf', 'hnsw', 'auto'
@@ -45,6 +49,9 @@ FAISS_IVF_NPROBE_RATIO = 4  # nprobe = nlist // this ratio
 # === Embedding Configuration ===
 EMBEDDING_USE_PREFIX = True  # Add E5 instruction prefixes (query:/passage:)
 
+
+# === Document Watcher Configuration ===
+CHECK_NEW_DOCUMENTS_ON_START = False  # Check for new/modified documents at startup
 
 # === Server Configuration ===
 ENABLE_SERVER = True
