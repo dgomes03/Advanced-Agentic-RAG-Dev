@@ -217,6 +217,18 @@ def create_app(retriever, host='0.0.0.0', port=5050):
 
                     cache_offset = rag_system.prompt_cache[0].offset if rag_system.prompt_cache else 0
                     print(f"KV-cache loaded from {cache_path} (offset={cache_offset})")
+
+                    # Trim generated response tokens from the cache.
+                    # The saved cache has prompt + generated tokens, but only the prompt
+                    # tokens form a valid prefix for future prompts.
+                    prompt_token_count_str = metadata.get("prompt_token_count")
+                    if prompt_token_count_str:
+                        prompt_token_count = int(prompt_token_count_str)
+                        trim_amount = cache_offset - prompt_token_count
+                        if trim_amount > 0:
+                            for layer in rag_system.prompt_cache:
+                                layer.trim(trim_amount)
+                            print(f"Cache trimmed: {cache_offset} -> {prompt_token_count} tokens (removed {trim_amount} generated tokens)")
                 except Exception as e:
                     print(f"Failed to load cache file (may be incompatible): {e}")
                     rag_system.prompt_cache = make_prompt_cache(rag_system.llm_model)
@@ -412,9 +424,10 @@ def create_app(retriever, host='0.0.0.0', port=5050):
 
             # Handle response (could be tuple or string)
             if isinstance(response, tuple):
-                response_text, _ = response
+                response_text, last_prompt = response
             else:
                 response_text = response
+                last_prompt = None
 
             # Emit completion
             emit('done', {'message_id': message_id})
@@ -434,6 +447,13 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                         metadata["conversation"] = _json.dumps(
                             conversation_manager.get_conversation(), ensure_ascii=False
                         )
+                    # Save prompt token count so generated tokens can be trimmed on restore.
+                    # The cache currently has prompt + generated tokens, but only the prompt
+                    # tokens form a valid prefix for future prompts (generated tokens don't
+                    # match the chat template re-formatted version of the same response).
+                    if last_prompt is not None:
+                        prompt_token_count = len(rag_system.llm_tokenizer.encode(last_prompt, add_special_tokens=False))
+                        metadata["prompt_token_count"] = str(prompt_token_count)
                     save_prompt_cache(cache_path, prompt_cache, metadata)
                     print(f"KV-cache saved to {cache_path}")
                 except Exception as e:
