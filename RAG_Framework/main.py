@@ -13,14 +13,14 @@ from RAG_Framework.core.config import (
     EMBEDDING_MODEL_NAME, MODEL_PATH, RERANKER_MODEL_NAME,
     ENABLE_SERVER, SERVER_HOST, SERVER_PORT, EVAL, num_threads,
     ADVANCED_REASONING, ENABLE_SQL_DATABASES, SQL_DATABASE_CONFIGS,
-    CHECK_NEW_DOCUMENTS_ON_START
+    CHECK_NEW_DOCUMENTS_ON_START, HIERARCHICAL_INDEXING
 )
 
 torch.set_num_threads(int(num_threads))
 torch.set_num_interop_threads(int(num_threads))
 faiss.omp_set_num_threads(int(num_threads))
 
-from RAG_Framework.components.indexer import Indexer, start_document_check
+from RAG_Framework.components.indexer import Indexer, HierarchicalIndexer, start_document_check
 from RAG_Framework.components.retrievers import Retriever
 from RAG_Framework.components.generators import Generator
 from RAG_Framework.core.conversation_manager import ConversationManager
@@ -36,13 +36,22 @@ if __name__ == "__main__":
 
     # Check if indices need building first
     print("Checking for saved indices...")
-    indexer = Indexer(enable_ocr=True)
+    if HIERARCHICAL_INDEXING:
+        indexer = HierarchicalIndexer(enable_ocr=True)
+    else:
+        indexer = Indexer(enable_ocr=True)
     indices = indexer.load_indices()
 
     if indices[0] is None or indices[1] is None:
         print("No saved indices found. Proceeding to build indices.")
         print("Loading and chunking documents...")
-        chunks, chunk_metadata = indexer.load_and_content_chunk_pdfs_parallel()
+
+        if HIERARCHICAL_INDEXING:
+            chunks, chunk_metadata, parent_store = indexer.load_and_chunk_documents_parallel()
+        else:
+            chunks, chunk_metadata = indexer.load_and_chunk_documents_parallel()
+            parent_store = None
+
         if not chunks:
             print("No documents were loaded or processed. Exiting.")
             exit()
@@ -61,7 +70,11 @@ if __name__ == "__main__":
         bm25 = indexer.build_bm25_index(chunks)
         faiss_index = indexer.build_faiss_index(multi_vector_index)
         metadata_index = indexer.build_metadata_index(chunk_metadata)
-        indexer.save_indices(multi_vector_index, bm25, metadata_index, faiss_index)
+        if HIERARCHICAL_INDEXING:
+            indexer.save_indices(multi_vector_index, bm25, metadata_index, faiss_index,
+                                parent_store=parent_store)
+        else:
+            indexer.save_indices(multi_vector_index, bm25, metadata_index, faiss_index)
         print("Indices built and saved successfully.")
 
         # Free embedding model after building - will be lazy-loaded later if needed

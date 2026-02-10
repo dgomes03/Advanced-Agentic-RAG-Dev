@@ -1,3 +1,4 @@
+import os
 import re
 import threading
 import numpy as np
@@ -7,7 +8,7 @@ from mlx_lm import generate
 
 from RAG_Framework.core.config import (
     BM25_ENABLE_STEMMING, BM25_ENABLE_STOPWORDS, BM25_LANGUAGES,
-    EMBEDDING_USE_PREFIX, RETRIEVAL_TOP_K, RERANKER_TOP_N
+    EMBEDDING_USE_PREFIX, RETRIEVAL_TOP_K, RERANKER_TOP_N, PARENT_TOP_N
 )
 from RAG_Framework.core.text_processing import tokenize_for_bm25, prepare_for_embedding
 
@@ -32,6 +33,7 @@ class Retriever:
         self._bm25 = None
         self._metadata_index = None
         self._faiss_index = None
+        self._parent_store = None
         self._indices_loaded = False
 
         # Thread safety for lazy loading
@@ -64,9 +66,15 @@ class Retriever:
             with self._load_lock:
                 if not self._indices_loaded:
                     print("Loading indices...")
-                    from RAG_Framework.components.indexer import Indexer
-                    indexer = Indexer()
-                    self._multi_vector_index, self._bm25, self._metadata_index, self._faiss_index = indexer.load_indices()
+                    from RAG_Framework.core.config import HIERARCHICAL_INDEXING
+                    if HIERARCHICAL_INDEXING:
+                        from RAG_Framework.components.indexer import HierarchicalIndexer
+                        indexer = HierarchicalIndexer()
+                        self._multi_vector_index, self._bm25, self._metadata_index, self._faiss_index, self._parent_store = indexer.load_indices()
+                    else:
+                        from RAG_Framework.components.indexer import Indexer
+                        indexer = Indexer()
+                        self._multi_vector_index, self._bm25, self._metadata_index, self._faiss_index = indexer.load_indices()
                     self._indices_loaded = True
 
     @property
@@ -89,14 +97,63 @@ class Retriever:
         self._ensure_indices_loaded()
         return self._metadata_index
 
-    def update_indices(self, multi_vector_index, bm25, metadata_index, faiss_index):
+    @property
+    def parent_store(self):
+        self._ensure_indices_loaded()
+        return self._parent_store
+
+    def update_indices(self, multi_vector_index, bm25, metadata_index, faiss_index,
+                       parent_store=None):
         """Thread-safe swap of all in-memory indices."""
         with self._load_lock:
             self._multi_vector_index = multi_vector_index
             self._bm25 = bm25
             self._metadata_index = metadata_index
             self._faiss_index = faiss_index
+            if parent_store is not None:
+                self._parent_store = parent_store
             self._indices_loaded = True
+
+    def _resolve_parents(self, reranked_pairs, top_n=None):
+        """
+        Resolve child chunks to their parent chunks, deduplicating by parent.
+
+        Args:
+            reranked_pairs: List of (child_text, child_metadata) tuples
+            top_n: Max number of results to return (applied after dedup)
+
+        Returns:
+            List of (text, metadata) tuples — parent chunks if available,
+            otherwise children as-is.
+        """
+        if self._parent_store is None:
+            return reranked_pairs
+
+        resolved = []
+        seen_parent_ids = set()
+
+        for child_text, child_meta in reranked_pairs:
+            parent_idx = child_meta.get('parent_idx')
+            if parent_idx is None:
+                # No parent mapping — return child as-is
+                resolved.append((child_text, child_meta))
+                continue
+
+            if parent_idx in seen_parent_ids:
+                continue
+            seen_parent_ids.add(parent_idx)
+
+            if parent_idx < len(self._parent_store):
+                parent = self._parent_store[parent_idx]
+                resolved.append((parent["text"], parent["metadata"]))
+            else:
+                # Fallback if parent_idx is out of range
+                resolved.append((child_text, child_meta))
+
+        if top_n:
+            resolved = resolved[:top_n]
+
+        return resolved
 
     @staticmethod
     def normalize_scores(scores):
@@ -163,6 +220,8 @@ class Retriever:
         if sort_by_page and results:
             results.sort(key=lambda x: (
                 x['metadata'].get('page', 0),
+                x['metadata'].get('slide', 0),
+                x['metadata'].get('sheet_index', 0),
                 x['metadata'].get('chunk_idx', 0),
                 x['metadata'].get('table_idx', 0),
                 x['metadata'].get('img_idx', 0)
@@ -280,15 +339,18 @@ class Retriever:
         # Rerank chunks while preserving metadata
         reranked = self.rerank_chunks_with_metadata(query, retrieved_chunks, retrieved_metadata, top_n=rerank_top_n)
 
+        # Resolve to parent chunks if hierarchical mode is active
+        resolved = self._resolve_parents(reranked, top_n=PARENT_TOP_N)
+
         # Store metadata for citation tracking
-        self.last_retrieved_metadata = [meta for _, meta in reranked]
+        self.last_retrieved_metadata = [meta for _, meta in resolved]
 
         if use_summarization:
             from RAG_Framework.components.generators import Generator
-            reranked_texts = [chunk for chunk, _ in reranked]
-            final_context = Generator.summarize_passages(reranked_texts, self.llm_model, self.llm_tokenizer)
+            resolved_texts = [chunk for chunk, _ in resolved]
+            final_context = Generator.summarize_passages(resolved_texts, self.llm_model, self.llm_tokenizer)
         else:
-            final_context = "\n---\n".join([chunk for chunk, _ in reranked])
+            final_context = "\n---\n".join([chunk for chunk, _ in resolved])
         return final_context
 
     def combined_retrieval_with_chunks(
@@ -342,9 +404,13 @@ class Retriever:
         retrieved_metadata = [self.multi_vector_index[idx]["metadata"] for idx in top_indices]
 
         reranked = self.rerank_chunks_with_metadata(query, retrieved_chunks, retrieved_metadata, top_n=rerank_top_n)
-        self.last_retrieved_metadata = [meta for _, meta in reranked]
 
-        chunks_list = [chunk for chunk, _ in reranked]
+        # Resolve to parent chunks if hierarchical mode is active
+        resolved = self._resolve_parents(reranked, top_n=PARENT_TOP_N)
+
+        self.last_retrieved_metadata = [meta for _, meta in resolved]
+
+        chunks_list = [chunk for chunk, _ in resolved]
         context_string = "\n---\n".join(chunks_list)
         return context_string, chunks_list
 
@@ -387,13 +453,26 @@ class Retriever:
 
                 return error_msg
 
+            # Determine document format for citation style
+            doc_ext = os.path.splitext(document_name)[1].lower() if '.' in document_name else ''
+
             # Combine all chunks with their metadata for context
             document_content = []
             for result in results:
                 chunk_text = result['text']
                 metadata = result['metadata']
-                # Add citation info
-                citation = f"[Page {metadata.get('page', 'N/A')}, Chunk {metadata.get('chunk_idx', 'N/A')}]"
+                # Format-aware citation
+                if doc_ext == '.pptx':
+                    citation = f"[Slide {metadata.get('slide', metadata.get('page', 0) + 1)}, Chunk {metadata.get('chunk_idx', metadata.get('table_idx', metadata.get('img_idx', 'N/A')))}]"
+                elif doc_ext in ('.xlsx', '.xls'):
+                    sheet = metadata.get('sheet', 'Sheet1')
+                    citation = f"[Sheet '{sheet}', Chunk {metadata.get('chunk_idx', 'N/A')}]"
+                elif doc_ext == '.csv':
+                    citation = f"[Chunk {metadata.get('chunk_idx', 'N/A')}]"
+                elif doc_ext == '.pdf':
+                    citation = f"[Page {metadata.get('page', 'N/A')}, Chunk {metadata.get('chunk_idx', metadata.get('table_idx', metadata.get('img_idx', 'N/A')))}]"
+                else:
+                    citation = f"[Chunk {metadata.get('chunk_idx', metadata.get('img_idx', 'N/A'))}]"
                 document_content.append(f"{chunk_text}\n{citation}")
 
             full_document = "\n--- Page Break ---\n".join(document_content)
@@ -402,7 +481,13 @@ class Retriever:
             doc_metadata = results[0]['metadata']
             header = f"DOCUMENT: {doc_metadata.get('document_name', document_name)}\n"
             header += f"TOTAL CHUNKS: {len(results)}\n"
-            header += f"PAGES: {max(r['metadata'].get('page', 0) for r in results) + 1}\n"
+            if doc_ext == '.pptx':
+                header += f"SLIDES: {max(r['metadata'].get('slide', r['metadata'].get('page', 0) + 1) for r in results)}\n"
+            elif doc_ext in ('.xlsx', '.xls'):
+                sheets = set(r['metadata'].get('sheet', '') for r in results)
+                header += f"SHEETS: {', '.join(sorted(s for s in sheets if s))}\n"
+            else:
+                header += f"PAGES: {max(r['metadata'].get('page', 0) for r in results) + 1}\n"
             header += "="*50 + "\n"
 
             return header + full_document

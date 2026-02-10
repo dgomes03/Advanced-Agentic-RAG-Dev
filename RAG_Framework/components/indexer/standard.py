@@ -13,7 +13,7 @@ from RAG_Framework.core.config import (
     DOCUMENTS_DIR, EMBEDDING_MODEL_NAME,
     MULTIVECTOR_INDEX_PATH, BM25_DATA_PATH,
     METADATA_INDEX_PATH, FAISS_INDEX_PATH,
-    CHUNK_SIZE, CHUNK_OVERLAP,
+    CHUNK_SIZE, CHUNK_OVERLAP, MIN_CHUNK_CHARS,
     BM25_ENABLE_STEMMING, BM25_ENABLE_STOPWORDS, BM25_LANGUAGES,
     FAISS_INDEX_TYPE, FAISS_IVF_NPROBE_RATIO,
     EMBEDDING_USE_PREFIX
@@ -406,7 +406,7 @@ class Indexer:
 
     def index_new_documents(self, multi_vector_index, bm25, metadata_index, faiss_index, embedding_model):
         """
-        Detect new PDFs in DOCUMENTS_DIR, process only those, and merge into existing indices.
+        Detect new documents in DOCUMENTS_DIR, process only those, and merge into existing indices.
 
         Args:
             multi_vector_index: Existing multi-vector index (list of dicts)
@@ -419,23 +419,29 @@ class Indexer:
             Tuple of (multi_vector_index, bm25, metadata_index, faiss_index, new_filenames)
             or None if no new documents were found.
         """
-        # List all PDFs in the documents directory
-        all_pdfs = [f for f in os.listdir(self.documents_dir) if f.lower().endswith('.pdf')]
+        from RAG_Framework.components.indexer.processors import process_single_document, SUPPORTED_EXTENSIONS as _SE
+
+        # List all supported files in the documents directory
+        all_files = [
+            f for f in os.listdir(self.documents_dir)
+            if os.path.splitext(f)[1].lower() in _SE
+        ]
 
         # Determine which are already indexed by checking metadata_index keys
         indexed_filenames = set()
         for key in metadata_index:
-            if key.endswith('.pdf'):
+            # Keys that have a file extension are document names
+            if os.path.splitext(key)[1]:
                 indexed_filenames.add(key)
 
-        new_filenames = [f for f in all_pdfs if f not in indexed_filenames]
+        new_filenames = [f for f in all_files if f not in indexed_filenames]
 
         if not new_filenames:
             return None
 
         print(f"New documents detected: {new_filenames}")
 
-        # Build file_infos for new PDFs only
+        # Build file_infos for new files only
         max_chunk_length = CHUNK_SIZE
         chunk_overlap = CHUNK_OVERLAP
         existing_doc_count = len(indexed_filenames)
@@ -454,22 +460,24 @@ class Indexer:
             for i, f in enumerate(new_filenames)
         ]
 
-        # Process new PDFs in parallel
+        # Process new documents in parallel
         num_processes = max(1, min(cpu_count() - 1, 8))
         print(f"Processing {len(new_filenames)} new document(s) with {num_processes} processes...")
 
         with Pool(processes=num_processes) as pool:
             results = list(tqdm(
-                pool.imap(self.process_single_pdf, file_infos),
+                pool.imap(process_single_document, file_infos),
                 total=len(file_infos),
-                desc="Processing new PDFs"
+                desc="Processing new documents"
             ))
 
         new_chunks = []
         new_metadata = []
         for chunks, metadata in results:
-            new_chunks.extend(chunks)
-            new_metadata.extend(metadata)
+            for chunk, meta in zip(chunks, metadata):
+                if len(chunk) >= MIN_CHUNK_CHARS:
+                    new_chunks.append(chunk)
+                    new_metadata.append(meta)
 
         if not new_chunks:
             print("No content extracted from new documents.")
@@ -517,24 +525,29 @@ class Indexer:
 
         return multi_vector_index, bm25, metadata_index, faiss_index, new_filenames
 
-    def load_and_content_chunk_pdfs_parallel(self, max_chunk_length=None, chunk_overlap=None):
-        """Load and process PDF documents in parallel"""
+    def load_and_chunk_documents_parallel(self, max_chunk_length=None, chunk_overlap=None):
+        """Load and process all supported documents in parallel."""
+        from RAG_Framework.components.indexer.processors import process_single_document, SUPPORTED_EXTENSIONS as _SE
+
         # Use config defaults if not specified
         if max_chunk_length is None:
             max_chunk_length = CHUNK_SIZE
         if chunk_overlap is None:
             chunk_overlap = CHUNK_OVERLAP
 
-        pdf_files = [os.path.join(self.documents_dir, f) for f in os.listdir(self.documents_dir)
-                    if f.lower().endswith('.pdf')]
-        print(f"Found {len(pdf_files)} PDF files to process.")
-        if not pdf_files:
+        doc_files = [
+            os.path.join(self.documents_dir, f)
+            for f in os.listdir(self.documents_dir)
+            if os.path.splitext(f)[1].lower() in _SE
+        ]
+        print(f"Found {len(doc_files)} document(s) to process.")
+        if not doc_files:
             return [], []
 
         # Pass OCR configuration and chunk overlap to each process
         file_infos = [
             (f, i, max_chunk_length, chunk_overlap, self.enable_ocr, self.ocr_min_width, self.ocr_min_height, self.ocr_resolution)
-            for i, f in enumerate(pdf_files)
+            for i, f in enumerate(doc_files)
         ]
 
         # Use optimal number of processes (cpu_count - 1, minimum 1, maximum 8)
@@ -544,16 +557,23 @@ class Indexer:
         # Process files in parallel with progress bar
         with Pool(processes=num_processes) as pool:
             results = list(tqdm(
-                pool.imap(self.process_single_pdf, file_infos),
+                pool.imap(process_single_document, file_infos),
                 total=len(file_infos),
-                desc="Processing PDFs"
+                desc="Processing documents"
             ))
 
         all_chunks = []
         all_metadata = []
         for chunks, metadata in results:
-            all_chunks.extend(chunks)
-            all_metadata.extend(metadata)
+            for chunk, meta in zip(chunks, metadata):
+                if len(chunk) >= MIN_CHUNK_CHARS:
+                    all_chunks.append(chunk)
+                    all_metadata.append(meta)
 
-        print(f"Extracted {len(all_chunks)} chunks from {len(pdf_files)} documents")
+        print(f"Extracted {len(all_chunks)} chunks from {len(doc_files)} documents")
         return all_chunks, all_metadata
+
+    # Backward-compatible alias
+    def load_and_content_chunk_pdfs_parallel(self, max_chunk_length=None, chunk_overlap=None):
+        """Deprecated: use load_and_chunk_documents_parallel instead."""
+        return self.load_and_chunk_documents_parallel(max_chunk_length, chunk_overlap)

@@ -31,7 +31,11 @@ EVAL = False
 # === Chunking Configuration ===
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 128  # 25% overlap to preserve boundary information
-PARENT_CHUNK_SIZE = 2048  # For hierarchical indexing (future use) TODO: Implement hierarchical indexing with parent chunks
+MIN_CHUNK_CHARS = 20  # Minimum chunk length; filters junk OCR/table fragments
+PARENT_CHUNK_SIZE = 2048  # Parent chunks for hierarchical indexing
+
+HIERARCHICAL_INDEXING = False  # Toggle: True = hierarchical, False = standard flat chunking
+PARENT_STORE_PATH = os.path.join(PROJECT_ROOT, "Indexes", "parent_store.pkl")
 
 # === BM25 Configuration ===
 BM25_ENABLE_STEMMING = True
@@ -41,6 +45,7 @@ BM25_LANGUAGES = ['english', 'portuguese']  # Languages for stemmer and stop wor
 # === Retrieval Configuration ===
 RETRIEVAL_TOP_K = 40        # Number of candidates retrieved from FAISS + BM25
 RERANKER_TOP_N = 20         # Number of results kept after reranking
+PARENT_TOP_N = 10            # Max parent chunks returned after dedup (hierarchical mode only)
 
 # === FAISS Configuration ===
 FAISS_INDEX_TYPE = 'auto'  # Options: 'flat', 'ivf', 'hnsw', 'auto'

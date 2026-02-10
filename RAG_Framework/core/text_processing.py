@@ -100,18 +100,21 @@ def tokenize_for_bm25(text, enable_stemming=True, enable_stopwords=True,
     return tokens
 
 
-def clean_text(text):
+def clean_text(text, source_format='pdf'):
     """
     Clean and normalize text for better embedding quality.
 
     Handles:
-    - Unicode normalization
-    - Whitespace cleanup
-    - PDF hyphenation fixes
-    - Header/footer removal patterns
+    - Unicode normalization (all formats)
+    - Whitespace cleanup (all formats)
+    - PDF hyphenation fixes (pdf only)
+    - Header/footer removal patterns (pdf only)
+    - OCR garbage character removal (image_ocr only)
+    - Residual HTML entity stripping (html only)
 
     Args:
-        text: Raw text from PDF extraction
+        text: Raw text from document extraction
+        source_format: Format of the source document ('pdf', 'html', 'image_ocr', or other)
 
     Returns:
         Cleaned and normalized text
@@ -119,23 +122,34 @@ def clean_text(text):
     if not text:
         return ""
 
-    # Unicode normalization (NFKC for compatibility)
+    # Unicode normalization (NFKC for compatibility) — all formats
     text = unicodedata.normalize('NFKC', text)
 
-    # Fix PDF hyphenation (word-\n continuation)
-    text = re.sub(r'(\w+)-\n(\w+)', r'\1\2', text)
+    # Format-specific cleaning
+    if source_format == 'pdf':
+        # Fix PDF hyphenation (word-\n continuation)
+        text = re.sub(r'(\w+)-\n(\w+)', r'\1\2', text)
 
-    # Fix line breaks within sentences
-    text = re.sub(r'(?<=[a-z,])\n(?=[a-z])', ' ', text)
+        # Fix line breaks within sentences
+        text = re.sub(r'(?<=[a-z,])\n(?=[a-z])', ' ', text)
 
-    # Remove page numbers (common patterns)
-    text = re.sub(r'\n\s*\d+\s*\n', '\n', text)  # Standalone numbers on lines
-    text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)  # Page numbers
+        # Remove page numbers (common patterns)
+        text = re.sub(r'\n\s*\d+\s*\n', '\n', text)  # Standalone numbers on lines
+        text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)  # Page numbers
 
-    # Remove common header/footer patterns
-    text = re.sub(r'^\s*Page\s+\d+\s*(of\s+\d+)?\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+        # Remove common header/footer patterns
+        text = re.sub(r'^\s*Page\s+\d+\s*(of\s+\d+)?\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
 
-    # Normalize whitespace
+    elif source_format == 'image_ocr':
+        # Strip garbage characters common from OCR
+        text = re.sub(r'[^\w\s.,;:!?\'\"()\-/&@#%$€£\n]', '', text)
+
+    elif source_format == 'html':
+        # Strip residual HTML entities
+        text = re.sub(r'&[a-zA-Z]+;', ' ', text)
+        text = re.sub(r'&#\d+;', ' ', text)
+
+    # Normalize whitespace — all formats
     text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces/tabs to single space
     text = re.sub(r'\n{3,}', '\n\n', text)  # Multiple newlines to double
 

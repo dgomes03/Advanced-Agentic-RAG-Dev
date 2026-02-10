@@ -39,7 +39,7 @@ def get_tools_for_standard_generator():
                         "properties": {
                             "document_name": {
                                 "type": "string",
-                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
+                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf', 'data.xlsx', 'notes.md')"
                             }
                         },
                         "required": ["document_name"]
@@ -221,7 +221,7 @@ def get_tools_for_agentic_generator():
                         "properties": {
                             "document_name": {
                                 "type": "string",
-                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf')"
+                                "description": "The name of the document to retrieve (e.g., 'annual_report.pdf', 'data.xlsx', 'notes.md')"
                             }
                         },
                         "required": ["document_name"]
