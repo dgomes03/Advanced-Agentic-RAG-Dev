@@ -311,6 +311,106 @@ class UIComponents {
     }
 
     /**
+     * Create a thinking panel for LRM reasoning model
+     */
+    static createThinkingPanel(messageId) {
+        const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageContent) return;
+
+        // If panel already exists (tool call continuation), reuse it
+        const existing = document.querySelector(`[data-thinking-for="${messageId}"]`);
+        if (existing) {
+            existing.classList.remove('collapsed');
+            const content = existing.querySelector('.thinking-panel-content');
+            const prevText = content.getAttribute('data-thinking-text') || '';
+            if (prevText) {
+                content.setAttribute('data-thinking-text', prevText + '\n\n---\n\n');
+            }
+            const label = existing.querySelector('.thinking-panel-label');
+            if (label && !label.querySelector('.thinking-spinner')) {
+                const spinner = document.createElement('div');
+                spinner.className = 'thinking-spinner';
+                label.appendChild(spinner);
+            }
+            return;
+        }
+
+        const message = messageContent.closest('.message');
+
+        // Create thinking panel
+        const panel = document.createElement('div');
+        panel.className = 'thinking-panel';
+        panel.setAttribute('data-thinking-for', messageId);
+
+        panel.innerHTML = `
+            <div class="thinking-panel-header">
+                <div class="thinking-panel-label">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M8 2C5.5 2 3.5 4 3.5 6.5c0 1.5.7 2.8 1.8 3.6.3.2.5.6.5 1v.9h4.4v-.9c0-.4.2-.8.5-1C11.8 9.3 12.5 8 12.5 6.5 12.5 4 10.5 2 8 2z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M6 14h4M6.5 12h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                    <span>Thinking</span>
+                    <div class="thinking-spinner"></div>
+                </div>
+                <svg class="thinking-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="thinking-panel-content" data-thinking-text=""></div>
+        `;
+
+        // Toggle collapse on header click
+        const header = panel.querySelector('.thinking-panel-header');
+        header.addEventListener('click', () => {
+            panel.classList.toggle('collapsed');
+        });
+
+        // Insert before message content
+        message.insertBefore(panel, messageContent);
+        this.scrollToBottom();
+    }
+
+    /**
+     * Append text to a thinking panel
+     */
+    static appendThinkingText(messageId, text) {
+        const panel = document.querySelector(`[data-thinking-for="${messageId}"]`);
+        if (!panel) return;
+
+        const content = panel.querySelector('.thinking-panel-content');
+        const currentText = content.getAttribute('data-thinking-text') || '';
+        const newText = currentText + text;
+        content.setAttribute('data-thinking-text', newText);
+
+        // Render as markdown
+        const html = MarkdownRenderer.render(newText);
+        content.innerHTML = html;
+        MarkdownRenderer.renderMath(content);
+
+        this.scrollToBottom();
+    }
+
+    /**
+     * Finalize a thinking panel (remove spinner, collapse by default)
+     */
+    static finalizeThinkingPanel(messageId) {
+        const panel = document.querySelector(`[data-thinking-for="${messageId}"]`);
+        if (!panel) return;
+
+        // Remove spinner
+        const spinner = panel.querySelector('.thinking-spinner');
+        if (spinner) spinner.remove();
+
+        // Only collapse if the message area has content; if it's empty the
+        // thinking panel is the only place the user can see the response.
+        const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
+        const hasResponse = messageContent && (messageContent.getAttribute('data-raw-text') || '').trim();
+        if (hasResponse) {
+            panel.classList.add('collapsed');
+        }
+    }
+
+    /**
      * Smooth scroll to bottom of messages
      */
     static scrollToBottom() {

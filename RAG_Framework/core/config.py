@@ -16,7 +16,7 @@ PROJECT_ROOT = "/Users/diogogomes/Documents/Uni/Tese Mestrado"
 
 # === Constants ===
 DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "RAG_database")
-MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Instruct-2512-mixed-8-6-bit"
+MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Reasoning-2512-mixed-8-6-bit"
 ADVANCED_REASONING_AGENT_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-3B-Instruct-2512-mixed-8-6-bit"
 ADVANCED_REASONING_RESPONSE_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Instruct-2512-mixed-8-6-bit"
 EMBEDDING_MODEL_NAME = 'intfloat/multilingual-e5-base'
@@ -25,7 +25,7 @@ BM25_DATA_PATH = os.path.join(PROJECT_ROOT, "Indexes", "BM25_index.pkl")
 METADATA_INDEX_PATH = os.path.join(PROJECT_ROOT, "Indexes", "metadata_index.pkl")
 FAISS_INDEX_PATH = os.path.join(PROJECT_ROOT, "Indexes", "faiss_index.faiss")
 RERANKER_MODEL_NAME = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
-MAX_RESPONSE_TOKENS = 1000
+MAX_RESPONSE_TOKENS = 5000
 EVAL = False
 
 # === Chunking Configuration ===
@@ -59,7 +59,7 @@ EMBEDDING_USE_PREFIX = True  # Add E5 instruction prefixes (query:/passage:)
 CHECK_NEW_DOCUMENTS_ON_START = False  # Check for new/modified documents at startup
 
 # === Server Configuration ===
-ENABLE_SERVER = True
+ENABLE_SERVER = False
 SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5050
 
@@ -67,6 +67,9 @@ SERVER_PORT = 5050
 ADVANCED_REASONING = False
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
+
+# === Language Reasoning Model (LRM) Configuration ===
+REASONING_MODEL = True  # True = use LRM generator with [THINK] support, False = use standard generator
 
 # === Google Custom Search Configuration ===
 GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"

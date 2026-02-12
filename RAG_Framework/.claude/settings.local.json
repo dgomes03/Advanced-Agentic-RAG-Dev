@@ -16,7 +16,10 @@
       "Bash(PYTHONPATH=\"/Users/diogogomes/Documents/Uni/Tese Mestrado:$PYTHONPATH\" python3:*)",
       "WebFetch(domain:docs.ragas.io)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(/opt/anaconda3/envs/RAG/bin/python:*)"
+      "Bash(/opt/anaconda3/envs/RAG/bin/python:*)",
+      "WebFetch(domain:docs.vllm.ai)",
+      "WebFetch(domain:qwenlm.github.io)",
+      "WebFetch(domain:docs.openwebui.com)"
     ]
   }
 }

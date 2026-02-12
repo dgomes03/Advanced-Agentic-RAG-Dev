@@ -12,7 +12,7 @@ from mlx_lm.models.cache import make_prompt_cache
 from RAG_Framework.core.config import (
     EMBEDDING_MODEL_NAME, MODEL_PATH, RERANKER_MODEL_NAME,
     ENABLE_SERVER, SERVER_HOST, SERVER_PORT, EVAL, num_threads,
-    ADVANCED_REASONING, ENABLE_SQL_DATABASES, SQL_DATABASE_CONFIGS,
+    ADVANCED_REASONING, REASONING_MODEL, ENABLE_SQL_DATABASES, SQL_DATABASE_CONFIGS,
     CHECK_NEW_DOCUMENTS_ON_START, HIERARCHICAL_INDEXING
 )
 
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     print("\nLoading LLM...")
     llm_model, llm_tokenizer = load(MODEL_PATH)
     prompt_cache = make_prompt_cache(llm_model)
-    conversation_manager = ConversationManager()
+    conversation_manager = ConversationManager(reasoning_model=REASONING_MODEL)
 
     # Create Retriever with lazy loading - embedding model, reranker, and indices
     # will only be loaded when document retrieval is first called
@@ -149,6 +149,9 @@ if __name__ == "__main__":
         if ADVANCED_REASONING:
             from RAG_Framework.components.generators.reasoning import AgenticGenerator
             print("Using Advanced Reasoning mode with agentic generator")
+        elif REASONING_MODEL:
+            from RAG_Framework.components.generators.LRM import LRMGenerator
+            print("Using Language Reasoning Model (LRM) mode with [THINK] support")
 
         try:
             while True:
@@ -162,7 +165,7 @@ if __name__ == "__main__":
                     print("Conversation and cache cleared.")
                     continue
 
-                # Use the appropriate generator based on ADVANCED_REASONING
+                # Use the appropriate generator
                 if ADVANCED_REASONING:
                     rag_response = AgenticGenerator.agentic_answer_query(
                         query,
@@ -172,6 +175,15 @@ if __name__ == "__main__":
                         prompt_cache,
                         conversation_manager
                     )
+                elif REASONING_MODEL:
+                    rag_response = LRMGenerator.answer_query_with_llm(
+                        query,
+                        llm_model,
+                        llm_tokenizer,
+                        retriever,
+                        prompt_cache,
+                        conversation_manager=conversation_manager
+                    )
                 else:
                     rag_response = Generator.answer_query_with_llm(
                         query,
@@ -179,7 +191,7 @@ if __name__ == "__main__":
                         llm_tokenizer,
                         retriever,
                         prompt_cache,
-                        conversation_manager=conversation_manager #TODO: does this need the =conversation_manager ??????????????????
+                        conversation_manager=conversation_manager
                     )
 
                 # Ensure rag_response_tuple is a tuple before unpacking

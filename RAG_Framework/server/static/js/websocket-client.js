@@ -42,6 +42,11 @@ class RAGWebSocketClient {
         // Message events
         this.socket.on('text_chunk', (data) => this.onTextChunk(data));
 
+        // Thinking events (LRM reasoning model)
+        this.socket.on('thinking_start', (data) => this.onThinkingStart(data));
+        this.socket.on('thinking_chunk', (data) => this.onThinkingChunk(data));
+        this.socket.on('thinking_complete', (data) => this.onThinkingComplete(data));
+
         // Tool call events
         this.socket.on('tool_call_start', (data) => this.onToolCallStart(data));
         this.socket.on('tool_call_result', (data) => this.onToolCallResult(data));
@@ -183,6 +188,33 @@ class RAGWebSocketClient {
     }
 
     /**
+     * Handle thinking start (LRM reasoning model)
+     */
+    onThinkingStart(data) {
+        if (this.currentMessageId) {
+            UIComponents.createThinkingPanel(this.currentMessageId);
+        }
+    }
+
+    /**
+     * Handle thinking chunk (LRM reasoning model)
+     */
+    onThinkingChunk(data) {
+        if (this.currentMessageId) {
+            UIComponents.appendThinkingText(this.currentMessageId, data.text);
+        }
+    }
+
+    /**
+     * Handle thinking complete (LRM reasoning model)
+     */
+    onThinkingComplete(data) {
+        if (this.currentMessageId) {
+            UIComponents.finalizeThinkingPanel(this.currentMessageId);
+        }
+    }
+
+    /**
      * Handle tool call start
      */
     onToolCallStart(data) {
@@ -248,14 +280,22 @@ class RAGWebSocketClient {
             const messageContent = document.querySelector(`[data-message-id="${this.currentMessageId}"]`);
             if (messageContent) {
                 // Get the accumulated text from data attribute
-                const rawText = messageContent.getAttribute('data-raw-text') || messageContent.textContent;
+                let rawText = messageContent.getAttribute('data-raw-text') || '';
+
+                // Fallback: if no text_chunk was streamed, use the response from the server
+                if (!rawText.trim() && data.response) {
+                    rawText = data.response;
+                    messageContent.setAttribute('data-raw-text', rawText);
+                }
 
                 // Final render
-                const html = MarkdownRenderer.render(rawText);
-                messageContent.innerHTML = html;
+                if (rawText.trim()) {
+                    const html = MarkdownRenderer.render(rawText);
+                    messageContent.innerHTML = html;
 
-                // Final math render
-                MarkdownRenderer.renderMath(messageContent);
+                    // Final math render
+                    MarkdownRenderer.renderMath(messageContent);
+                }
             }
         }
 

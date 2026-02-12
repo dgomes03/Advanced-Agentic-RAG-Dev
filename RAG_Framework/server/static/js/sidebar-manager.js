@@ -355,6 +355,13 @@ class SidebarManager {
                 const msgId = 'loaded-' + Date.now() + Math.random();
                 UIComponents.createAssistantMessage(msgId);
 
+                // Restore thinking panel if present
+                if (msg.thinking) {
+                    UIComponents.createThinkingPanel(msgId);
+                    UIComponents.appendThinkingText(msgId, msg.thinking);
+                    UIComponents.finalizeThinkingPanel(msgId);
+                }
+
                 const messageContent = document.querySelector(`[data-message-id="${msgId}"]`);
                 if (messageContent) {
                     messageContent.setAttribute('data-raw-text', msg.content);
@@ -428,7 +435,19 @@ class SidebarManager {
                 // Clean any leaked tool call syntax before saving
                 text = MarkdownRenderer.removeToolCallSyntax(text).trim();
                 if (text) {
-                    messages.push({ role: 'assistant', content: text });
+                    const msg = { role: 'assistant', content: text };
+                    // Include thinking text if present
+                    const thinkingPanel = el.querySelector('.thinking-panel');
+                    if (thinkingPanel) {
+                        const thinkingContent = thinkingPanel.querySelector('.thinking-panel-content');
+                        if (thinkingContent) {
+                            const thinkingText = thinkingContent.getAttribute('data-thinking-text') || '';
+                            if (thinkingText.trim()) {
+                                msg.thinking = thinkingText.trim();
+                            }
+                        }
+                    }
+                    messages.push(msg);
                 }
             }
         });

@@ -13,6 +13,153 @@ from RAG_Framework.core.conversation_manager import ConversationManager
 
 class Generator:
     @staticmethod
+    def _parse_tool_calls(response_text):
+        """Parse tool calls from response text. Handles three formats:
+        1. Array format: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
+        2. Named format: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
+        3. Simple format: [TOOL_CALLS]name\n{json} or name{json}
+
+        For LRM responses, pass only the text after [TOOL_CALLS] marker
+        (with any stray [/THINK] already stripped).
+
+        Returns a list of {"name": ..., "arguments": ...} dicts, or empty list on failure.
+        """
+        import re
+
+        # For standard generator, the full response_text contains [TOOL_CALLS]
+        # For LRM, the caller strips the prefix before calling this.
+        if "[TOOL_CALLS]" in response_text:
+            tc_idx = response_text.find("[TOOL_CALLS]")
+            after_tc = response_text[tc_idx + len("[TOOL_CALLS]"):].strip()
+        else:
+            after_tc = response_text.strip()
+
+        tool_calls = []
+
+        if after_tc.startswith('['):
+            # Array format: [{"name": "...", "arguments": {...}}]
+            bracket_count = 1
+            end_idx = 1
+            while end_idx < len(after_tc) and bracket_count > 0:
+                if after_tc[end_idx] == '[':
+                    bracket_count += 1
+                elif after_tc[end_idx] == ']':
+                    bracket_count -= 1
+                end_idx += 1
+            tool_json = after_tc[:end_idx]
+            tool_calls = json.loads(tool_json)
+
+        elif '[ARGS]' in after_tc:
+            # Named format: name[ARGS]{json}
+            # For standard generator, multiple [TOOL_CALLS]...[ARGS] pairs may exist
+            # For LRM, after_tc already has the marker stripped
+            tool_pattern = re.compile(r'(?:\[TOOL_CALLS\])?([^\[]+)\[ARGS\]')
+            matches = list(tool_pattern.finditer(after_tc))
+
+            for match in matches:
+                tool_name = match.group(1).strip()
+                args_start = match.end()
+                args_part = after_tc[args_start:].strip()
+
+                brace_count = 0
+                end_idx = 0
+                for i, char in enumerate(args_part):
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end_idx = i + 1
+                            break
+
+                args_json = args_part[:end_idx] if end_idx > 0 else "{}"
+                tool_args = json.loads(args_json) if args_json else {}
+                tool_calls.append({"name": tool_name, "arguments": tool_args})
+
+        elif '{' in after_tc:
+            # Simple format: name\n{json} or name{json}
+            brace_idx = after_tc.find('{')
+            tool_name = after_tc[:brace_idx].strip()
+            args_str = after_tc[brace_idx:]
+
+            depth = 0
+            end_idx = 0
+            for i, c in enumerate(args_str):
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = i + 1
+                        break
+
+            args_json = args_str[:end_idx] if end_idx > 0 else "{}"
+            tool_args = json.loads(args_json)
+
+            if tool_name:
+                tool_calls.append({"name": tool_name, "arguments": tool_args})
+            elif isinstance(tool_args, dict) and "name" in tool_args:
+                tool_calls.append(tool_args)
+
+        return tool_calls
+
+    @staticmethod
+    def _execute_tool(tool_name, tool_args, retriever, llm_model=None, llm_tokenizer=None):
+        """Execute a single tool by name and return the result string.
+
+        Returns the tool result (always a string).
+        """
+        if tool_name == "search_documents":
+            tool_result = retriever.search_documents_tool(tool_args.get("query", ""))
+        elif tool_name == "retrieve_document_by_name":
+            tool_result = retriever.retrieve_document_by_name_tool(tool_args.get("document_name", ""))
+        elif tool_name == "list_available_documents":
+            tool_result = retriever.list_available_documents_tool(tool_args.get("filter_keyword", ""))
+        elif tool_name == "search_wikipedia":
+            tool_result = Generator.search_wikipedia(tool_args.get("query", ""))
+        elif tool_name == "agentic_generator":
+            from RAG_Framework.components.generators import AgenticGenerator
+            tool_result = AgenticGenerator.agentic_answer_query(
+                tool_args.get("query", ""), llm_model, llm_tokenizer, retriever)
+        elif tool_name == "google_custom_search":
+            tool_result = Generator.google_custom_search(tool_args.get("query", ""))
+        elif tool_name == "duckduckgo_search":
+            tool_result = Generator.duckduckgo_search(
+                tool_args.get("query", ""), tool_args.get("max_results", 5))
+        elif tool_name == "fetch_url_content":
+            tool_result = Generator.fetch_url_content(
+                tool_args.get("url", ""), tool_args.get("max_chars", 5000))
+        elif tool_name == "query_database":
+            from RAG_Framework.components.database import get_sql_connector
+            sql_connector = get_sql_connector()
+            if sql_connector is None:
+                tool_result = {"success": False, "error": "SQL databases are not configured"}
+            else:
+                tool_result = sql_connector.execute_query(
+                    tool_args.get("db_name", ""), tool_args.get("sql_query", ""))
+        elif tool_name == "list_databases":
+            from RAG_Framework.components.database import get_sql_connector
+            sql_connector = get_sql_connector()
+            if sql_connector is None:
+                tool_result = {"success": False, "error": "SQL databases are not configured"}
+            else:
+                tool_result = sql_connector.list_databases()
+        elif tool_name == "get_database_schema":
+            from RAG_Framework.components.database import get_sql_connector
+            sql_connector = get_sql_connector()
+            if sql_connector is None:
+                tool_result = {"success": False, "error": "SQL databases are not configured"}
+            else:
+                tool_result = sql_connector.get_schema(tool_args.get("db_name", ""))
+        else:
+            tool_result = f"Error: Unknown tool: {tool_name}"
+
+        if not isinstance(tool_result, str):
+            tool_result = json.dumps(tool_result, ensure_ascii=False)
+
+        return tool_result
+
+    @staticmethod
     def _generate_with_streaming(model, tokenizer, prompt, max_tokens, sampler, logits_processors, prompt_cache, stream_callback, verbose=True):
         """
         Generate text with real-time streaming via callback.
@@ -397,55 +544,7 @@ class Generator:
             if "[TOOL_CALLS]" in response_text:
                 print(f"\nModel requested to use tools. Processing tool calls...")
                 try:
-                    tool_calls = []
-                    
-                    # Check which format we're dealing with
-                    if "[TOOL_CALLS][" in response_text:
-                        # OLD FORMAT: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
-                        start_marker = "[TOOL_CALLS]["
-                        start_idx = response_text.find(start_marker) + len(start_marker) - 1
-                        bracket_count = 1
-                        end_idx = start_idx + 1
-                        while end_idx < len(response_text) and bracket_count > 0:
-                            if response_text[end_idx] == '[':
-                                bracket_count += 1
-                            elif response_text[end_idx] == ']':
-                                bracket_count -= 1
-                            end_idx += 1
-                        tool_json = response_text[start_idx:end_idx]
-                        tool_calls = json.loads(tool_json)
-                        
-                    elif "[ARGS]" in response_text:
-                        # NEW FORMAT: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
-                        # Handle multiple tool calls by finding all [TOOL_CALLS]...[ARGS]... patterns
-                        import re
-                        tool_pattern = re.compile(r'\[TOOL_CALLS\]([^\[]+)\[ARGS\]')
-                        matches = list(tool_pattern.finditer(response_text))
-
-                        for match in matches:
-                            tool_name = match.group(1).strip()
-                            args_start = match.end()
-                            args_part = response_text[args_start:].strip()
-
-                            # Extract JSON object
-                            brace_count = 0
-                            end_idx = 0
-                            for i, char in enumerate(args_part):
-                                if char == '{':
-                                    brace_count += 1
-                                elif char == '}':
-                                    brace_count -= 1
-                                    if brace_count == 0:
-                                        end_idx = i + 1
-                                        break
-
-                            args_json = args_part[:end_idx] if end_idx > 0 else "{}"
-                            tool_args = json.loads(args_json) if args_json else {}
-                            tool_calls.append({"name": tool_name, "arguments": tool_args})
-                    
-                    else:
-                        print("Unknown tool call format")
-                        break
+                    tool_calls = Generator._parse_tool_calls(response_text)
 
                     if not tool_calls:
                         print("No valid tool calls found")
@@ -453,20 +552,17 @@ class Generator:
 
                     print(f"Found {len(tool_calls)} tool call(s): {[call.get('name', 'unknown') for call in tool_calls]}")
 
-                    # Add tool call to conversation
+                    # Format tool calls for conversation
                     formatted_tool_calls = []
                     for call in tool_calls:
                         call_id = ''.join(random.choices(string.ascii_letters + string.digits, k=9))
-                        # Handle different argument structures for different tools
                         if isinstance(call.get("arguments"), dict):
                             arguments_str = json.dumps(call["arguments"])
                         elif isinstance(call.get("arguments"), str):
                             try:
-                                # Try to parse as JSON first
-                                parsed_args = json.loads(call["arguments"])
+                                json.loads(call["arguments"])
                                 arguments_str = call["arguments"]
                             except json.JSONDecodeError:
-                                # If it's a string, create appropriate JSON based on tool
                                 tool_name = call.get("name", "")
                                 if tool_name in ["search_documents", "search_wikipedia"]:
                                     arguments_str = json.dumps({"query": call["arguments"]})
@@ -486,7 +582,6 @@ class Generator:
                             "type": "function"
                         })
 
-                    # Add to conversation
                     conversation.append({
                         "role": "assistant",
                         "content": "",
@@ -494,7 +589,6 @@ class Generator:
                     })
 
                     # Execute tools sequentially
-                    tool_results = []
                     for i, tool_call in enumerate(formatted_tool_calls):
                         tool_name = tool_call["function"]["name"]
                         tool_id = tool_call["id"]
@@ -507,7 +601,6 @@ class Generator:
                         else:
                             print(f"Executing tool {i+1}/{len(formatted_tool_calls)}: {tool_name} with args: {tool_args}")
 
-                            # Emit tool call start event
                             if stream_callback:
                                 stream_callback('tool_call_start', {
                                     'tool_id': tool_id,
@@ -515,65 +608,9 @@ class Generator:
                                     'arguments': tool_args
                                 })
 
-                            # Execute the appropriate tool with proper argument extraction
-                            if tool_name == "search_documents":
-                                query_str = tool_args.get("query", "")
-                                tool_result = retriever.search_documents_tool(query_str)
-                            elif tool_name == "retrieve_document_by_name":
-                                doc_name = tool_args.get("document_name", "")
-                                tool_result = retriever.retrieve_document_by_name_tool(doc_name)
-                            elif tool_name == "list_available_documents":
-                                filter_keyword = tool_args.get("filter_keyword", "")
-                                tool_result = retriever.list_available_documents_tool(filter_keyword)
-                            elif tool_name == "search_wikipedia":
-                                query_str = tool_args.get("query", "")
-                                tool_result = Generator.search_wikipedia(query_str)
-                            elif tool_name == "agentic_generator":
-                                query_str = tool_args.get("query", "")
-                                tool_result = AgenticGenerator.agentic_answer_query(query_str, llm_model, llm_tokenizer, retriever)
-                            elif tool_name == "google_custom_search":
-                                query_str = tool_args.get("query", "")
-                                tool_result = Generator.google_custom_search(query_str)
-                            elif tool_name == "duckduckgo_search":
-                                query_str = tool_args.get("query", "")
-                                max_results = tool_args.get("max_results", 5)
-                                tool_result = Generator.duckduckgo_search(query_str, max_results)
-                            elif tool_name == "fetch_url_content":
-                                url = tool_args.get("url", "")
-                                max_chars = tool_args.get("max_chars", 5000)
-                                tool_result = Generator.fetch_url_content(url, max_chars)
-                            elif tool_name == "query_database":
-                                from RAG_Framework.components.database import get_sql_connector
-                                sql_connector = get_sql_connector()
-                                if sql_connector is None:
-                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
-                                else:
-                                    db_name = tool_args.get("db_name", "")
-                                    sql_query = tool_args.get("sql_query", "")
-                                    tool_result = sql_connector.execute_query(db_name, sql_query)
-                            elif tool_name == "list_databases":
-                                from RAG_Framework.components.database import get_sql_connector
-                                sql_connector = get_sql_connector()
-                                if sql_connector is None:
-                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
-                                else:
-                                    tool_result = sql_connector.list_databases()
-                            elif tool_name == "get_database_schema":
-                                from RAG_Framework.components.database import get_sql_connector
-                                sql_connector = get_sql_connector()
-                                if sql_connector is None:
-                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
-                                else:
-                                    db_name = tool_args.get("db_name", "")
-                                    tool_result = sql_connector.get_schema(db_name)
-                            else:
-                                tool_result = f"Error: Unknown tool: {tool_name}"
+                            tool_result = Generator._execute_tool(
+                                tool_name, tool_args, retriever, llm_model, llm_tokenizer)
 
-                        # Convert result to string if it's not already
-                        if not isinstance(tool_result, str):
-                            tool_result = json.dumps(tool_result, ensure_ascii=False)
-
-                        # Emit tool call result event
                         if stream_callback:
                             stream_callback('tool_call_result', {
                                 'tool_id': tool_id,
@@ -582,19 +619,14 @@ class Generator:
                                 'status': 'success' if not tool_result.startswith('Error') else 'error'
                             })
 
-                        #print(tool_result) # mostrar resultados da tool use antes de resposta
-
-                        # Add tool result to conversation
                         conversation.append({
                             "role": "tool",
                             "name": tool_name,
                             "content": tool_result,
                             "tool_call_id": tool_call["id"]
                         })
-                        tool_results.append(tool_result)
 
                     print("All tool executions completed. Preparing final response...")
-                    # Continue to next iteration to generate final response
                     is_tool_call_continuation = True
                     continue
                 except Exception as e:
@@ -604,7 +636,7 @@ class Generator:
                     break
             else:
                 # No tool calls needed, return the response
-                print("No tool calls detected, returning response")
+                print("\nNo tool calls detected, returning response")
 
                 # Add assistant response to conversation history for multi-turn caching
                 conversation_manager.add_assistant_message(response_text)

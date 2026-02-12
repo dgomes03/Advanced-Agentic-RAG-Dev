@@ -389,7 +389,7 @@ def create_app(retriever, host='0.0.0.0', port=5050):
         try:
             # Import here to avoid circular dependency
             from RAG_Framework.components.generators import Generator
-            from RAG_Framework.core.config import ADVANCED_REASONING
+            from RAG_Framework.core.config import ADVANCED_REASONING, REASONING_MODEL
 
             # Emit thinking status
             emit('status', {'state': 'thinking', 'message': 'Processing your query...'})
@@ -409,6 +409,18 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                     prompt_cache=prompt_cache,
                     conversation_manager=conversation_manager
                 )
+            elif REASONING_MODEL:
+                from RAG_Framework.components.generators.LRM import LRMGenerator
+                response = LRMGenerator.answer_query_with_llm(
+                    query=query,
+                    llm_model=rag_system.llm_model,
+                    llm_tokenizer=rag_system.llm_tokenizer,
+                    retriever=rag_system,
+                    prompt_cache=prompt_cache,
+                    stream_callback=stream_callback,
+                    verbose=False,
+                    conversation_manager=conversation_manager
+                )
             else:
                 response = Generator.answer_query_with_llm(
                     query=query,
@@ -419,7 +431,6 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                     stream_callback=stream_callback,
                     verbose=False,
                     conversation_manager=conversation_manager
-                
                 )
 
             # Handle response (could be tuple or string)
@@ -429,8 +440,8 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                 response_text = response
                 last_prompt = None
 
-            # Emit completion
-            emit('done', {'message_id': message_id})
+            # Emit completion (include response text as fallback for the frontend)
+            emit('done', {'message_id': message_id, 'response': response_text})
             print(f"\nResponse complete. (Message ID: {message_id})")
 
             # Save KV-cache to disk for this conversation

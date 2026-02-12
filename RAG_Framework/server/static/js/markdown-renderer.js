@@ -30,11 +30,10 @@ class MarkdownRenderer {
     }
 
     static removeToolCallSyntax(text) {
-        // Remove tool call patterns with proper brace matching:
-        //   New format: [TOOL_CALLS]name[ARGS]{...}
-        //   Old format: [TOOL_CALLS][{...}]
-        //   Partial patterns during streaming
-        let result = text;
+        // Remove [THINK]...[/THINK] reasoning markers if they leak through
+        let result = text.replace(/\[THINK\][\s\S]*?\[\/THINK\]/g, '');
+        // Also strip partial/unclosed [THINK] at end of text
+        result = result.replace(/\[THINK\][\s\S]*$/, '');
 
         while (result.includes('[TOOL_CALLS]')) {
             const start = result.indexOf('[TOOL_CALLS]');

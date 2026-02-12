@@ -1,0 +1,535 @@
+"""
+LRM Generator: Language Reasoning Model generator with [THINK] marker support.
+
+Uses stream_generate() from mlx_lm for generation. Decodes tokens by converting
+IDs to raw BPE strings (convert_ids_to_tokens) and applying the GPT-2
+bytes_to_unicode inverse mapping, bypassing the broken tokenizer.decode().
+Handles [THINK]...[/THINK] reasoning blocks during streaming.
+"""
+
+import json
+import random
+import re
+import string
+
+from mlx_lm import stream_generate
+from mlx_lm.sample_utils import make_sampler, make_logits_processors
+
+from RAG_Framework.core.config import MAX_RESPONSE_TOKENS
+from RAG_Framework.core.cache_manager import CacheManager
+from RAG_Framework.core.conversation_manager import ConversationManager
+
+
+# State machine states for streaming
+_STATE_NORMAL = "NORMAL"
+_STATE_THINKING = "THINKING"
+
+# Markers
+_THINK_START = "[THINK]"
+_THINK_END = "[/THINK]"
+_TOOL_MARKER = "[TOOL_CALLS]"
+# Buffer size must cover the longest marker
+_BUFFER_TAIL = max(len(_THINK_START), len(_THINK_END), len(_TOOL_MARKER))
+# Special tokens to omit from decoded text (keep [THINK]/[/THINK] for state machine)
+_SKIP_SPECIAL = {'<s>', '</s>', '<unk>', '<pad>'}
+
+
+class LRMGenerator:
+    """Generator for reasoning models with [THINK] block support."""
+
+    _byte_decoder = None  # Lazy-initialized inverse of GPT-2 bytes_to_unicode
+    _inv_vocab = None     # Lazy-initialized inverse vocabulary {id: string}
+    _special_ids = None   # Lazy-initialized set of special token IDs
+
+    @staticmethod
+    def _build_byte_decoder():
+        """Build the inverse of the GPT-2 byte-level BPE bytes_to_unicode mapping.
+
+        In byte-level BPE, each byte (0-255) is mapped to a Unicode character.
+        Printable ASCII maps to itself; non-printable bytes (space, newline, etc.)
+        map to characters starting at U+0100 (e.g. space→Ġ, newline→Ċ).
+        This builds the reverse mapping to convert back.
+        """
+        bs = (
+            list(range(ord("!"), ord("~") + 1))
+            + list(range(ord("¡"), ord("¬") + 1))
+            + list(range(ord("®"), ord("ÿ") + 1))
+        )
+        cs = bs[:]
+        n = 0
+        for b in range(2**8):
+            if b not in bs:
+                bs.append(b)
+                cs.append(2**8 + n)
+                n += 1
+        return {chr(c): b for b, c in zip(bs, cs)}
+
+    @staticmethod
+    def _ensure_vocab(tokenizer):
+        """Lazily build and cache inverse vocabulary and special token set."""
+        if LRMGenerator._byte_decoder is None:
+            LRMGenerator._byte_decoder = LRMGenerator._build_byte_decoder()
+        if LRMGenerator._inv_vocab is None:
+            vocab = tokenizer.get_vocab()
+            LRMGenerator._inv_vocab = {v: k for k, v in vocab.items()}
+            # Build special IDs: all_special_ids + added_tokens_encoder
+            special = set(getattr(tokenizer, 'all_special_ids', []))
+            if hasattr(tokenizer, 'added_tokens_encoder'):
+                special.update(tokenizer.added_tokens_encoder.values())
+            LRMGenerator._special_ids = special
+            # Debug: log vocab stats
+            n_special = len(special)
+            has_g_dot = sum(1 for s in LRMGenerator._inv_vocab.values() if '\u0120' in s)
+            has_metaspace = sum(1 for s in LRMGenerator._inv_vocab.values() if '\u2581' in s)
+            print(f"[LRM Vocab] {len(LRMGenerator._inv_vocab)} tokens, "
+                  f"{n_special} special, "
+                  f"{has_g_dot} with Ġ(U+0120), "
+                  f"{has_metaspace} with ▁(U+2581)")
+
+    @staticmethod
+    def _decode_tokens(tokenizer, tokens):
+        """Decode token IDs to text, bypassing tokenizer.decode() entirely.
+
+        The Ministral tokenizer has a decoder mismatch: the BPE vocabulary uses
+        Ġ (U+0120) as the space marker, but the decoder expects ▁ (U+2581).
+        This causes tokenizer.decode() to strip all spaces from output.
+
+        Instead, we look up raw BPE strings from the cached inverse vocabulary
+        and apply the GPT-2 bytes_to_unicode inverse mapping to recover the
+        original bytes (space, newline, etc.). Also handles ▁ (U+2581) as
+        a space marker in case some tokens use Metaspace encoding.
+        """
+        if not tokens:
+            return ""
+        LRMGenerator._ensure_vocab(tokenizer)
+
+        inv_vocab = LRMGenerator._inv_vocab
+        special_ids = LRMGenerator._special_ids
+        byte_decoder = LRMGenerator._byte_decoder
+
+        # BPE tokens → byte decoder; special tokens → literal strings
+        parts = []
+        byte_buf = bytearray()
+
+        for tok_id in tokens:
+            tok_str = inv_vocab.get(tok_id, '')
+
+            if tok_id in special_ids:
+                # Flush accumulated BPE bytes
+                if byte_buf:
+                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
+                    byte_buf = bytearray()
+                # Keep markers the state machine needs, skip EOS/BOS/etc.
+                if tok_str not in _SKIP_SPECIAL:
+                    parts.append(tok_str)
+            else:
+                # Regular BPE token: each char maps to a byte via bytes_to_unicode
+                for c in tok_str:
+                    if c == '\u2581':
+                        # Metaspace ▁ → space byte (handles mixed encoding)
+                        byte_buf.append(0x20)
+                    elif c in byte_decoder:
+                        byte_buf.append(byte_decoder[c])
+                    else:
+                        byte_buf.extend(c.encode('utf-8'))
+
+        if byte_buf:
+            parts.append(byte_buf.decode('utf-8', errors='ignore'))
+
+        return ''.join(parts)
+
+    @staticmethod
+    def _extract_thinking(text):
+        """Strip [THINK]...[/THINK] from raw response.
+
+        Returns:
+            (thinking_content, clean_text) tuple.
+        """
+        pattern = re.compile(r'\[THINK\](.*?)\[/THINK\]', re.DOTALL)
+        thinking_parts = pattern.findall(text)
+        thinking = "\n".join(thinking_parts).strip() if thinking_parts else ""
+        clean = pattern.sub("", text).strip()
+
+        # Handle unclosed [THINK] block (model didn't emit [/THINK])
+        if not thinking and '[THINK]' in clean:
+            idx = clean.find('[THINK]')
+            rest = clean[idx + len('[THINK]'):]
+            # Don't swallow [TOOL_CALLS] content into thinking
+            tc_idx = rest.find('[TOOL_CALLS]')
+            if tc_idx >= 0:
+                thinking = rest[:tc_idx].strip()
+                clean = clean[:idx].strip() + rest[tc_idx:]
+            else:
+                thinking = rest.strip()
+                clean = clean[:idx].strip()
+
+        return thinking, clean
+
+    @staticmethod
+    def _stream_with_thinking(model, tokenizer, prompt_tokens, max_tokens,
+                              stream_callback, prompt_cache=None,
+                              sampler=None, logits_processors=None):
+        """
+        Stream generate with [THINK] marker detection state machine.
+
+        Collects raw token IDs and decodes via _decode_tokens() which bypasses
+        tokenizer.decode() to fix the Ministral space-stripping bug.
+
+        Emits events via stream_callback:
+        - thinking_start: thinking block begins
+        - thinking_chunk: incremental thinking text
+        - thinking_complete: thinking block ended
+        - text_chunk: regular response text
+        """
+        state = _STATE_NORMAL
+        pending = ""
+        all_tokens = []
+        prev_decoded_len = 0
+        stop_streaming = False
+        text_emitted = False  # Track whether any text_chunk was sent to the UI
+
+        kwargs = {}
+        if prompt_cache is not None:
+            kwargs["prompt_cache"] = prompt_cache
+        if sampler is not None:
+            kwargs["sampler"] = sampler
+        if logits_processors is not None:
+            kwargs["logits_processors"] = logits_processors
+
+        _debug_logged = False
+
+        for response in stream_generate(
+            model=model,
+            tokenizer=tokenizer,
+            prompt=prompt_tokens,
+            max_tokens=max_tokens,
+            **kwargs
+        ):
+            all_tokens.append(response.token)
+
+            # Debug: log the first 20 tokens to diagnose decode issues
+            if not _debug_logged and len(all_tokens) == 20:
+                _debug_logged = True
+                LRMGenerator._ensure_vocab(tokenizer)
+                inv = LRMGenerator._inv_vocab
+                samples = [(tid, repr(inv.get(tid, '?'))) for tid in all_tokens]
+                #print(f"\n[LRM Debug] First 20 token IDs+strings: {samples}")
+
+            if stop_streaming:
+                continue  # keep generating for full_text / cache, but don't stream to UI
+
+            # Decode all accumulated tokens, fixing BPE artifacts (Ġ, Ċ, etc.)
+            decoded = LRMGenerator._decode_tokens(tokenizer, all_tokens)
+            segment = decoded[prev_decoded_len:]
+            prev_decoded_len = len(decoded)
+
+            if not segment:
+                continue
+
+            pending += segment
+
+            # --- Process pending based on state ---
+
+            if state == _STATE_NORMAL:
+                think_idx = pending.find(_THINK_START)
+                tool_idx = pending.find(_TOOL_MARKER)
+
+                if think_idx >= 0:
+                    # Emit text before [THINK]
+                    before = pending[:think_idx]
+                    if before and stream_callback:
+                        stream_callback('text_chunk', {'text': before})
+                        text_emitted = True
+                    pending = pending[think_idx + len(_THINK_START):]
+                    state = _STATE_THINKING
+                    if stream_callback:
+                        stream_callback('thinking_start', {})
+                elif tool_idx >= 0:
+                    before = pending[:tool_idx]
+                    if before.strip() and stream_callback:
+                        stream_callback('text_chunk', {'text': before})
+                        text_emitted = True
+                    pending = ""
+                    stop_streaming = True
+                    continue
+                elif len(pending) > _BUFFER_TAIL:
+                    safe = pending[:-_BUFFER_TAIL]
+                    pending = pending[-_BUFFER_TAIL:]
+                    if safe.strip() and stream_callback:
+                        stream_callback('text_chunk', {'text': safe})
+                        text_emitted = True
+
+            # Not elif — allows immediate processing after state transition
+            if state == _STATE_THINKING:
+                end_idx = pending.find(_THINK_END)
+                if end_idx >= 0:
+                    thinking_text = pending[:end_idx]
+                    if thinking_text and stream_callback:
+                        stream_callback('thinking_chunk', {'text': thinking_text})
+                    if stream_callback:
+                        stream_callback('thinking_complete', {})
+                    pending = pending[end_idx + len(_THINK_END):]
+                    state = _STATE_NORMAL
+                elif len(pending) > _BUFFER_TAIL:
+                    safe = pending[:-_BUFFER_TAIL]
+                    pending = pending[-_BUFFER_TAIL:]
+                    if safe and stream_callback:
+                        stream_callback('thinking_chunk', {'text': safe})
+
+        # Final decoded text from all collected tokens
+        full_text = LRMGenerator._decode_tokens(tokenizer, all_tokens)
+
+        # Flush remaining buffer
+        if pending:
+            if state == _STATE_THINKING:
+                if stream_callback:
+                    # Check if pending itself contains [/THINK] (edge case)
+                    end_idx = pending.find(_THINK_END)
+                    if end_idx >= 0:
+                        leftover_think = pending[:end_idx]
+                        if leftover_think:
+                            stream_callback('thinking_chunk', {'text': leftover_think})
+                        stream_callback('thinking_complete', {})
+                        response_part = pending[end_idx + len(_THINK_END):]
+                        if response_part.strip():
+                            stream_callback('text_chunk', {'text': response_part})
+                            text_emitted = True
+                    else:
+                        stream_callback('thinking_chunk', {'text': pending})
+                        stream_callback('thinking_complete', {})
+            else:
+                marker_idx = pending.find(_TOOL_MARKER)
+                to_emit = pending[:marker_idx] if marker_idx >= 0 else pending
+                if to_emit.strip() and stream_callback:
+                    stream_callback('text_chunk', {'text': to_emit})
+                    text_emitted = True
+
+        return full_text, text_emitted
+
+    @staticmethod
+    def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever,
+                              prompt_cache=None, stream_callback=None,
+                              verbose=True, conversation_manager=None):
+        from RAG_Framework.agents.tools import get_tools_for_standard_generator
+        from RAG_Framework.components.generators.standard import Generator
+
+        tools = get_tools_for_standard_generator()
+
+        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
+        logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
+        current_response = None
+
+        if conversation_manager is None:
+            conversation_manager = ConversationManager(reasoning_model=True)
+
+        conversation_manager.add_user_message(query)
+        conversation = conversation_manager.get_conversation()
+
+        pre_query_checkpoint = CacheManager.get_checkpoint(prompt_cache)
+        is_tool_call_continuation = False
+
+        while True:
+            if is_tool_call_continuation:
+                CacheManager.restore_checkpoint(prompt_cache, pre_query_checkpoint)
+
+            prompt = llm_tokenizer.apply_chat_template(
+                conversation,
+                add_generation_prompt=True,
+                tools=tools,
+                tokenize=False
+            )
+
+            print("\nFORMATTED PROMPT:")
+            print(prompt)
+
+            full_tokens = llm_tokenizer.encode(prompt, add_special_tokens=False)
+
+            cache_offset = prompt_cache[0].offset if prompt_cache and len(prompt_cache) > 0 else 0
+
+            if cache_offset > 0 and cache_offset < len(full_tokens):
+                prompt_tokens = full_tokens[cache_offset:]
+            else:
+                prompt_tokens = full_tokens
+                if cache_offset > 0:
+                    print(f"\n[KV-Cache] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), resetting cache")
+                    for layer in prompt_cache:
+                        if layer.offset > 0:
+                            layer.trim(layer.offset)
+
+            # Use stream_generate with manual token decoding
+            text_emitted = False
+            if stream_callback is not None:
+                response_text, text_emitted = LRMGenerator._stream_with_thinking(
+                    model=llm_model,
+                    tokenizer=llm_tokenizer,
+                    prompt_tokens=prompt_tokens,
+                    max_tokens=MAX_RESPONSE_TOKENS,
+                    stream_callback=stream_callback,
+                    prompt_cache=prompt_cache,
+                    sampler=sampler,
+                    logits_processors=logits_processors
+                )
+            else:
+                # Offline mode: use a console callback for real-time verbose output
+                def _console_callback(event, data):
+                    if event == 'thinking_start':
+                        print("\n--- Thinking ---", flush=True)
+                    elif event == 'thinking_chunk':
+                        print(data.get('text', ''), end='', flush=True)
+                    elif event == 'thinking_complete':
+                        print("\n--- End Thinking ---\n", flush=True)
+                    elif event == 'text_chunk':
+                        print(data.get('text', ''), end='', flush=True)
+
+                response_text, text_emitted = LRMGenerator._stream_with_thinking(
+                    model=llm_model,
+                    tokenizer=llm_tokenizer,
+                    prompt_tokens=prompt_tokens,
+                    max_tokens=MAX_RESPONSE_TOKENS,
+                    stream_callback=_console_callback if verbose else None,
+                    prompt_cache=prompt_cache,
+                    sampler=sampler,
+                    logits_processors=logits_processors
+                )
+                if not verbose:
+                    # If not verbose, _stream_with_thinking ran without callbacks
+                    # (text_emitted will be False, which is fine for offline)
+                    pass
+                else:
+                    print(flush=True)  # Final newline after streaming
+
+            response_text = response_text.replace('</s>', '').strip()
+
+            # Tool call handling
+            if "[TOOL_CALLS]" in response_text:
+                print(f"\nModel requested to use tools. Processing tool calls...")
+                try:
+                    # Extract text after [TOOL_CALLS], strip stray [/THINK]
+                    tc_idx = response_text.find('[TOOL_CALLS]')
+                    after_tc = response_text[tc_idx + len('[TOOL_CALLS]'):].strip()
+                    after_tc = after_tc.replace('[/THINK]', '').strip()
+                    print(f"[LRM Debug] Tool call text after marker: {after_tc[:300]!r}")
+
+                    tool_calls = Generator._parse_tool_calls(after_tc)
+
+                    if not tool_calls:
+                        print("No valid tool calls found")
+                        break
+
+                    print(f"Found {len(tool_calls)} tool call(s): {[call.get('name', 'unknown') for call in tool_calls]}")
+
+                    # Format tool calls for conversation
+                    formatted_tool_calls = []
+                    for call in tool_calls:
+                        call_id = ''.join(random.choices(string.ascii_letters + string.digits, k=9))
+                        if isinstance(call.get("arguments"), dict):
+                            arguments_str = json.dumps(call["arguments"])
+                        elif isinstance(call.get("arguments"), str):
+                            try:
+                                json.loads(call["arguments"])
+                                arguments_str = call["arguments"]
+                            except json.JSONDecodeError:
+                                tool_name = call.get("name", "")
+                                if tool_name in ["search_documents", "search_wikipedia"]:
+                                    arguments_str = json.dumps({"query": call["arguments"]})
+                                elif tool_name == "retrieve_document_by_name":
+                                    arguments_str = json.dumps({"document_name": call["arguments"]})
+                                else:
+                                    arguments_str = json.dumps({"query": str(call.get("arguments", ""))})
+                        else:
+                            arguments_str = "{}"
+
+                        formatted_tool_calls.append({
+                            "id": call_id,
+                            "function": {
+                                "name": call["name"],
+                                "arguments": arguments_str
+                            },
+                            "type": "function"
+                        })
+
+                    conversation.append({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": formatted_tool_calls
+                    })
+
+                    for i, tool_call in enumerate(formatted_tool_calls):
+                        tool_name = tool_call["function"]["name"]
+                        tool_id = tool_call["id"]
+                        args_str = tool_call["function"]["arguments"]
+                        try:
+                            tool_args = json.loads(args_str)
+                        except json.JSONDecodeError as e:
+                            tool_result = f"Tool call error: Invalid arguments format - {str(e)}"
+                            tool_args = {}
+                        else:
+                            print(f"Executing tool {i+1}/{len(formatted_tool_calls)}: {tool_name} with args: {tool_args}")
+
+                            if stream_callback:
+                                stream_callback('tool_call_start', {
+                                    'tool_id': tool_id,
+                                    'tool_name': tool_name,
+                                    'arguments': tool_args
+                                })
+
+                            tool_result = Generator._execute_tool(
+                                tool_name, tool_args, retriever, llm_model, llm_tokenizer)
+
+                        if stream_callback:
+                            stream_callback('tool_call_result', {
+                                'tool_id': tool_id,
+                                'tool_name': tool_name,
+                                'result': tool_result,
+                                'status': 'success' if not tool_result.startswith('Error') else 'error'
+                            })
+
+                        conversation.append({
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": tool_result,
+                            "tool_call_id": tool_call["id"]
+                        })
+
+                    print("All tool executions completed. Preparing final response...")
+                    is_tool_call_continuation = True
+                    continue
+                except Exception as e:
+                    print(f"Error processing tool calls: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    break
+            else:
+                # No tool calls — extract thinking and store in conversation
+                print("No tool calls detected, returning response")
+
+                thinking, clean_text = LRMGenerator._extract_thinking(response_text)
+
+                # If streaming didn't emit any text_chunk to the message area,
+                # emit it now so the message area isn't empty.
+                if not text_emitted and stream_callback:
+                    if clean_text:
+                        print(f"[LRM] Response not streamed, emitting clean_text ({len(clean_text)} chars)")
+                        stream_callback('text_chunk', {'text': clean_text})
+                    elif thinking:
+                        # Model put everything inside [THINK] (or didn't close it).
+                        # Emit thinking as response so the answer is visible in the
+                        # message area. This duplicates the thinking panel content,
+                        # but an empty message area is worse.
+                        clean_text = thinking
+                        print(f"[LRM] No text outside thinking, emitting thinking as response ({len(thinking)} chars)")
+                        stream_callback('text_chunk', {'text': thinking})
+
+                response_for_history = clean_text if clean_text else thinking
+                if thinking:
+                    conversation_manager.add_assistant_message_with_thinking(thinking, response_for_history)
+                else:
+                    conversation_manager.add_assistant_message(response_for_history)
+
+                if prompt_cache is not None:
+                    CacheManager.log_cache_stats(prompt_cache, f"After query (turn {conversation_manager.get_turn_count()})")
+
+                return clean_text, prompt
+
+        print("Fatal Error")
+        return current_response, prompt
