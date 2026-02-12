@@ -414,7 +414,7 @@ class UIComponents {
      * Smooth scroll to bottom of messages
      */
     static scrollToBottom() {
-        const messagesContainer = document.querySelector('.messages-container');
+        const messagesContainer = document.querySelector('.main-content');
         if (messagesContainer) {
             messagesContainer.scrollTo({
                 top: messagesContainer.scrollHeight,

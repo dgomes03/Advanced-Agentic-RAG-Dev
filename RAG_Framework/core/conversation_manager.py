@@ -21,20 +21,11 @@ class ConversationManager:
         "When searching the web, cite your sources.\n"
         "\nBe objective and brief in your responses."
         "\nIf a tool is not providing the information you need, try a different tool or ask the user for clarification instead of making assumptions."
-    )
-
-    REASONING_SYSTEM_PROMPT = (
-        "# HOW YOU SHOULD THINK AND ANSWER\n\n"
-        "First draft your thinking process (inner monologue) until you arrive at a response. "
-        "Format your response using Markdown, and use LaTeX for any mathematical equations. "
-        "Write both your thoughts and the response in the same language as the input.\n\n"
-        "Your thinking process must follow the template below:\n"
-        "[THINK]Your thoughts or/and draft, like working through an exercise on scratch paper. "
-        "Be as casual and as long as you want until you are confident to generate the response "
-        "to the user.[/THINK]\nHere, provide a self-contained response.\n\n"
-        "For trivial greetings or one-word acknowledgments you can skip the [THINK] block.\n\n"
-        "# YOUR ROLE AND CAPABILITIES\n\n"
-        + SYSTEM_PROMPT
+        """\n\n# HOW YOU SHOULD THINK AND ANSWER\n\nFirst draft your thinking process (inner monologue) 
+        until you arrive at a response. Format your response using Markdown, and use LaTeX for any mathematical equations. 
+        Write both your thoughts and the response in the same language as the input.\n\nYour thinking process must follow the 
+        template below:[THINK]Your thoughts or/and draft, like working through an exercise on scratch paper. Be as casual and as 
+        long as you want until you are confident to generate the response to the user.[/THINK]Here, provide a self-contained response."""    
     )
 
     def __init__(self, system_prompt: str = None, reasoning_model: bool = False):
@@ -45,16 +36,11 @@ class ConversationManager:
             system_prompt: Optional custom system prompt. Uses default if None.
             reasoning_model: If True, use reasoning system prompt with [THINK] support.
         """
-        self.reasoning_model = reasoning_model
-        if system_prompt:
-            base_prompt = system_prompt
-        elif reasoning_model:
-            base_prompt = self.REASONING_SYSTEM_PROMPT
-        else:
-            base_prompt = self.SYSTEM_PROMPT
+        self._system_prompt = system_prompt if system_prompt else self.SYSTEM_PROMPT 
+
         # Inject current date/time at the start of system prompt
         current_datetime = datetime.now().strftime("%A, %B %d, %Y at %H:%M")
-        self._system_prompt = f"Current date and time: {current_datetime}\n\n{base_prompt}"
+        self._system_prompt = f"Current date and time: {current_datetime}\n\n{self._system_prompt}"
         self.conversation = [{"role": "system", "content": self._system_prompt}]
 
     def add_user_message(self, content: str):

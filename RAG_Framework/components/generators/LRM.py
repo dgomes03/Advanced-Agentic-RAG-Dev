@@ -81,10 +81,10 @@ class LRMGenerator:
             n_special = len(special)
             has_g_dot = sum(1 for s in LRMGenerator._inv_vocab.values() if '\u0120' in s)
             has_metaspace = sum(1 for s in LRMGenerator._inv_vocab.values() if '\u2581' in s)
-            print(f"[LRM Vocab] {len(LRMGenerator._inv_vocab)} tokens, "
+            """print(f"[LRM Vocab] {len(LRMGenerator._inv_vocab)} tokens, "
                   f"{n_special} special, "
                   f"{has_g_dot} with Ġ(U+0120), "
-                  f"{has_metaspace} with ▁(U+2581)")
+                  f"{has_metaspace} with ▁(U+2581)")"""
 
     @staticmethod
     def _decode_tokens(tokenizer, tokens):
@@ -142,6 +142,10 @@ class LRMGenerator:
     def _extract_thinking(text):
         """Strip [THINK]...[/THINK] from raw response.
 
+        If the model placed everything inside [THINK] (nothing outside),
+        try to split reasoning from the actual response by looking for
+        common boundary markers like "Response:", "Answer:", etc.
+
         Returns:
             (thinking_content, clean_text) tuple.
         """
@@ -170,23 +174,22 @@ class LRMGenerator:
                               stream_callback, prompt_cache=None,
                               sampler=None, logits_processors=None):
         """
-        Stream generate with [THINK] marker detection state machine.
+        Stream generate with [THINK] marker detection.
 
-        Collects raw token IDs and decodes via _decode_tokens() which bypasses
-        tokenizer.decode() to fix the Ministral space-stripping bug.
+        Uses a simple index-based approach: accumulate the full decoded text
+        and track how far we've emitted.  A ``while`` loop inside each token
+        step handles multiple state transitions (e.g. [THINK]...[/THINK] in
+        one chunk) without waiting for the next token.
 
-        Emits events via stream_callback:
-        - thinking_start: thinking block begins
-        - thinking_chunk: incremental thinking text
-        - thinking_complete: thinking block ended
-        - text_chunk: regular response text
+        Emits via *stream_callback*:
+          thinking_start → thinking_chunk* → thinking_complete
+          text_chunk (regular response text)
         """
         state = _STATE_NORMAL
-        pending = ""
         all_tokens = []
-        prev_decoded_len = 0
+        emitted = 0           # index into decoded text already sent to UI
+        text_emitted = False
         stop_streaming = False
-        text_emitted = False  # Track whether any text_chunk was sent to the UI
 
         kwargs = {}
         if prompt_cache is not None:
@@ -196,7 +199,9 @@ class LRMGenerator:
         if logits_processors is not None:
             kwargs["logits_processors"] = logits_processors
 
-        _debug_logged = False
+        def _emit(event, data=None):
+            if stream_callback:
+                stream_callback(event, data or {})
 
         for response in stream_generate(
             model=model,
@@ -206,103 +211,86 @@ class LRMGenerator:
             **kwargs
         ):
             all_tokens.append(response.token)
-
-            # Debug: log the first 20 tokens to diagnose decode issues
-            if not _debug_logged and len(all_tokens) == 20:
-                _debug_logged = True
-                LRMGenerator._ensure_vocab(tokenizer)
-                inv = LRMGenerator._inv_vocab
-                samples = [(tid, repr(inv.get(tid, '?'))) for tid in all_tokens]
-                #print(f"\n[LRM Debug] First 20 token IDs+strings: {samples}")
-
             if stop_streaming:
-                continue  # keep generating for full_text / cache, but don't stream to UI
-
-            # Decode all accumulated tokens, fixing BPE artifacts (Ġ, Ċ, etc.)
-            decoded = LRMGenerator._decode_tokens(tokenizer, all_tokens)
-            segment = decoded[prev_decoded_len:]
-            prev_decoded_len = len(decoded)
-
-            if not segment:
                 continue
 
-            pending += segment
+            decoded = LRMGenerator._decode_tokens(tokenizer, all_tokens)
 
-            # --- Process pending based on state ---
+            # Process all transitions possible with current decoded text
+            while emitted < len(decoded):
+                remaining = decoded[emitted:]
 
-            if state == _STATE_NORMAL:
-                think_idx = pending.find(_THINK_START)
-                tool_idx = pending.find(_TOOL_MARKER)
+                if state == _STATE_NORMAL:
+                    ti = remaining.find(_THINK_START)
+                    mi = remaining.find(_TOOL_MARKER)
 
-                if think_idx >= 0:
-                    # Emit text before [THINK]
-                    before = pending[:think_idx]
-                    if before and stream_callback:
-                        stream_callback('text_chunk', {'text': before})
-                        text_emitted = True
-                    pending = pending[think_idx + len(_THINK_START):]
-                    state = _STATE_THINKING
-                    if stream_callback:
-                        stream_callback('thinking_start', {})
-                elif tool_idx >= 0:
-                    before = pending[:tool_idx]
-                    if before.strip() and stream_callback:
-                        stream_callback('text_chunk', {'text': before})
-                        text_emitted = True
-                    pending = ""
-                    stop_streaming = True
-                    continue
-                elif len(pending) > _BUFFER_TAIL:
-                    safe = pending[:-_BUFFER_TAIL]
-                    pending = pending[-_BUFFER_TAIL:]
-                    if safe.strip() and stream_callback:
-                        stream_callback('text_chunk', {'text': safe})
-                        text_emitted = True
-
-            # Not elif — allows immediate processing after state transition
-            if state == _STATE_THINKING:
-                end_idx = pending.find(_THINK_END)
-                if end_idx >= 0:
-                    thinking_text = pending[:end_idx]
-                    if thinking_text and stream_callback:
-                        stream_callback('thinking_chunk', {'text': thinking_text})
-                    if stream_callback:
-                        stream_callback('thinking_complete', {})
-                    pending = pending[end_idx + len(_THINK_END):]
-                    state = _STATE_NORMAL
-                elif len(pending) > _BUFFER_TAIL:
-                    safe = pending[:-_BUFFER_TAIL]
-                    pending = pending[-_BUFFER_TAIL:]
-                    if safe and stream_callback:
-                        stream_callback('thinking_chunk', {'text': safe})
-
-        # Final decoded text from all collected tokens
-        full_text = LRMGenerator._decode_tokens(tokenizer, all_tokens)
-
-        # Flush remaining buffer
-        if pending:
-            if state == _STATE_THINKING:
-                if stream_callback:
-                    # Check if pending itself contains [/THINK] (edge case)
-                    end_idx = pending.find(_THINK_END)
-                    if end_idx >= 0:
-                        leftover_think = pending[:end_idx]
-                        if leftover_think:
-                            stream_callback('thinking_chunk', {'text': leftover_think})
-                        stream_callback('thinking_complete', {})
-                        response_part = pending[end_idx + len(_THINK_END):]
-                        if response_part.strip():
-                            stream_callback('text_chunk', {'text': response_part})
+                    # Pick whichever marker comes first
+                    if ti >= 0 and (mi < 0 or ti <= mi):
+                        before = remaining[:ti]
+                        if before.strip():
+                            _emit('text_chunk', {'text': before})
                             text_emitted = True
-                    else:
-                        stream_callback('thinking_chunk', {'text': pending})
-                        stream_callback('thinking_complete', {})
-            else:
-                marker_idx = pending.find(_TOOL_MARKER)
-                to_emit = pending[:marker_idx] if marker_idx >= 0 else pending
-                if to_emit.strip() and stream_callback:
-                    stream_callback('text_chunk', {'text': to_emit})
+                        emitted += ti + len(_THINK_START)
+                        state = _STATE_THINKING
+                        _emit('thinking_start')
+                        continue  # re-check for [/THINK] immediately
+
+                    if mi >= 0 and (ti < 0 or mi < ti):
+                        before = remaining[:mi]
+                        if before.strip():
+                            _emit('text_chunk', {'text': before})
+                            text_emitted = True
+                        stop_streaming = True
+                        break
+
+                    # No marker yet — emit text safely outside the marker zone
+                    safe_len = len(remaining) - _BUFFER_TAIL
+                    if safe_len > 0:
+                        _emit('text_chunk', {'text': remaining[:safe_len]})
+                        text_emitted = True
+                        emitted += safe_len
+                    break  # wait for more tokens
+
+                elif state == _STATE_THINKING:
+                    ei = remaining.find(_THINK_END)
+                    if ei >= 0:
+                        if remaining[:ei]:
+                            _emit('thinking_chunk', {'text': remaining[:ei]})
+                        _emit('thinking_complete')
+                        emitted += ei + len(_THINK_END)
+                        state = _STATE_NORMAL
+                        continue  # re-check for text / new [THINK]
+
+                    # No end marker yet — stream safe portion
+                    safe_len = len(remaining) - _BUFFER_TAIL
+                    if safe_len > 0:
+                        _emit('thinking_chunk', {'text': remaining[:safe_len]})
+                        emitted += safe_len
+                    break  # wait for more tokens
+
+        # --- Flush after generation ends ---
+        full_text = LRMGenerator._decode_tokens(tokenizer, all_tokens)
+        remaining = full_text[emitted:]
+
+        if remaining and state == _STATE_THINKING:
+            ei = remaining.find(_THINK_END)
+            if ei >= 0:
+                if remaining[:ei]:
+                    _emit('thinking_chunk', {'text': remaining[:ei]})
+                _emit('thinking_complete')
+                rest = remaining[ei + len(_THINK_END):]
+                if rest.strip():
+                    _emit('text_chunk', {'text': rest})
                     text_emitted = True
+            else:
+                _emit('thinking_chunk', {'text': remaining})
+                _emit('thinking_complete')
+        elif remaining:
+            mi = remaining.find(_TOOL_MARKER)
+            to_emit = remaining[:mi] if mi >= 0 else remaining
+            if to_emit.strip():
+                _emit('text_chunk', {'text': to_emit})
+                text_emitted = True
 
         return full_text, text_emitted
 
@@ -339,8 +327,8 @@ class LRMGenerator:
                 tokenize=False
             )
 
-            print("\nFORMATTED PROMPT:")
-            print(prompt)
+            #print("\nFORMATTED PROMPT:")
+            #print(prompt)
 
             full_tokens = llm_tokenizer.encode(prompt, add_special_tokens=False)
 
@@ -377,7 +365,7 @@ class LRMGenerator:
                     elif event == 'thinking_chunk':
                         print(data.get('text', ''), end='', flush=True)
                     elif event == 'thinking_complete':
-                        print("\n--- End Thinking ---\n", flush=True)
+                        print("\n--- End Thinking ---", flush=True)
                     elif event == 'text_chunk':
                         print(data.get('text', ''), end='', flush=True)
 
@@ -501,24 +489,15 @@ class LRMGenerator:
                     break
             else:
                 # No tool calls — extract thinking and store in conversation
-                print("No tool calls detected, returning response")
+                print("\nNo tool calls detected, returning response")
 
                 thinking, clean_text = LRMGenerator._extract_thinking(response_text)
 
                 # If streaming didn't emit any text_chunk to the message area,
-                # emit it now so the message area isn't empty.
-                if not text_emitted and stream_callback:
-                    if clean_text:
-                        print(f"[LRM] Response not streamed, emitting clean_text ({len(clean_text)} chars)")
-                        stream_callback('text_chunk', {'text': clean_text})
-                    elif thinking:
-                        # Model put everything inside [THINK] (or didn't close it).
-                        # Emit thinking as response so the answer is visible in the
-                        # message area. This duplicates the thinking panel content,
-                        # but an empty message area is worse.
-                        clean_text = thinking
-                        print(f"[LRM] No text outside thinking, emitting thinking as response ({len(thinking)} chars)")
-                        stream_callback('text_chunk', {'text': thinking})
+                # emit the extracted response now (not the full thinking content).
+                if not text_emitted and stream_callback and clean_text:
+                    print(f"[LRM] Response not streamed, emitting clean_text ({len(clean_text)} chars)")
+                    stream_callback('text_chunk', {'text': clean_text})
 
                 response_for_history = clean_text if clean_text else thinking
                 if thinking:
@@ -529,7 +508,7 @@ class LRMGenerator:
                 if prompt_cache is not None:
                     CacheManager.log_cache_stats(prompt_cache, f"After query (turn {conversation_manager.get_turn_count()})")
 
-                return clean_text, prompt
+                return response_for_history, prompt
 
         print("Fatal Error")
         return current_response, prompt

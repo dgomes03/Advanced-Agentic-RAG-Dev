@@ -366,23 +366,14 @@ def create_app(retriever, host='0.0.0.0', port=5050):
         print(f"Message ID: {message_id}")
         print(f"{'='*60}\n")
 
-        # Create streaming callback for this specific query
-        def stream_callback(event_type, data):
-            """
-            Callback function for streaming events from the generator.
-            Emits WebSocket events to the connected client.
+        # Capture the requesting client's session so streaming events
+        # target it specifically (emit() instead of socketio.emit()).
+        sid = request.sid
 
-            Supported event types:
-            - 'text_chunk': Token streaming
-            - 'tool_call_start': Tool execution begins
-            - 'tool_call_result': Tool execution completes
-            - 'reasoning_step': Advanced reasoning step update
-            - 'reasoning_goal': Goal status update
-            - 'reasoning_evaluation': Evaluation results
-            - 'status': Status message
-            """
+        def stream_callback(event_type, data):
+            """Emit a streaming event to the requesting client."""
             try:
-                socketio.emit(event_type, data)
+                emit(event_type, data, to=sid)
             except Exception as e:
                 print(f"Error emitting {event_type}: {e}")
 

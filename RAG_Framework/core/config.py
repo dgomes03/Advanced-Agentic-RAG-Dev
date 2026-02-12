@@ -16,9 +16,7 @@ PROJECT_ROOT = "/Users/diogogomes/Documents/Uni/Tese Mestrado"
 
 # === Constants ===
 DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "RAG_database")
-MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Reasoning-2512-mixed-8-6-bit"
-ADVANCED_REASONING_AGENT_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-3B-Instruct-2512-mixed-8-6-bit"
-ADVANCED_REASONING_RESPONSE_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-8B-Instruct-2512-mixed-8-6-bit"
+MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-14B-Reasoning-2512-mixed-6-4-bit"
 EMBEDDING_MODEL_NAME = 'intfloat/multilingual-e5-base'
 MULTIVECTOR_INDEX_PATH = os.path.join(PROJECT_ROOT, "Indexes", "FAISS_index.pkl")
 BM25_DATA_PATH = os.path.join(PROJECT_ROOT, "Indexes", "BM25_index.pkl")
@@ -34,7 +32,7 @@ CHUNK_OVERLAP = 128  # 25% overlap to preserve boundary information
 MIN_CHUNK_CHARS = 20  # Minimum chunk length; filters junk OCR/table fragments
 PARENT_CHUNK_SIZE = 2048  # Parent chunks for hierarchical indexing
 
-HIERARCHICAL_INDEXING = False  # Toggle: True = hierarchical, False = standard flat chunking
+HIERARCHICAL_INDEXING = True  # Toggle: True = hierarchical, False = standard flat chunking
 PARENT_STORE_PATH = os.path.join(PROJECT_ROOT, "Indexes", "parent_store.pkl")
 
 # === BM25 Configuration ===
@@ -59,7 +57,7 @@ EMBEDDING_USE_PREFIX = True  # Add E5 instruction prefixes (query:/passage:)
 CHECK_NEW_DOCUMENTS_ON_START = False  # Check for new/modified documents at startup
 
 # === Server Configuration ===
-ENABLE_SERVER = False
+ENABLE_SERVER = True
 SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5050
 

@@ -174,6 +174,14 @@ class RAGWebSocketClient {
                 const newText = currentText + data.text;
                 messageContent.setAttribute('data-raw-text', newText);
 
+                // Collapse thinking panel when first response text arrives
+                if (!currentText.trim() && newText.trim()) {
+                    const panel = document.querySelector(`[data-thinking-for="${this.currentMessageId}"]`);
+                    if (panel && !panel.classList.contains('collapsed')) {
+                        panel.classList.add('collapsed');
+                    }
+                }
+
                 // Render markdown in real-time
                 const html = MarkdownRenderer.render(newText);
                 messageContent.innerHTML = html;
@@ -295,6 +303,12 @@ class RAGWebSocketClient {
 
                     // Final math render
                     MarkdownRenderer.renderMath(messageContent);
+
+                    // Collapse thinking panel now that response is complete
+                    const thinkingPanel = document.querySelector(`[data-thinking-for="${this.currentMessageId}"]`);
+                    if (thinkingPanel && !thinkingPanel.classList.contains('collapsed')) {
+                        thinkingPanel.classList.add('collapsed');
+                    }
                 }
             }
         }

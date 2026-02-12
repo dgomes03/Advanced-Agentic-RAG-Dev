@@ -151,7 +151,7 @@ if __name__ == "__main__":
             print("Using Advanced Reasoning mode with agentic generator")
         elif REASONING_MODEL:
             from RAG_Framework.components.generators.LRM import LRMGenerator
-            print("Using Language Reasoning Model (LRM) mode with [THINK] support")
+            
 
         try:
             while True:
