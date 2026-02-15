@@ -470,7 +470,7 @@ class Generator:
         tools = get_tools_for_standard_generator()
 
         # Temperature and top sampling
-        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9) # TODO: should i just leave the default values here? 
+        sampler = make_sampler(temp=0.1, top_p=0.9)
         logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
         current_response = None
 

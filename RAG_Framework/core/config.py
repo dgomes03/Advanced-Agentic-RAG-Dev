@@ -16,7 +16,7 @@ PROJECT_ROOT = "/Users/diogogomes/Documents/Uni/Tese Mestrado"
 
 # === Constants ===
 DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "RAG_database")
-MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-14B-Reasoning-2512-mixed-6-4-bit"
+MODEL_PATH = "/Users/diogogomes/.lmstudio/models/mlx-community/Ministral-3-14B-Instruct-2512-mixed-6-4-bit"
 EMBEDDING_MODEL_NAME = 'intfloat/multilingual-e5-base'
 MULTIVECTOR_INDEX_PATH = os.path.join(PROJECT_ROOT, "Indexes", "FAISS_index.pkl")
 BM25_DATA_PATH = os.path.join(PROJECT_ROOT, "Indexes", "BM25_index.pkl")
@@ -43,7 +43,7 @@ BM25_LANGUAGES = ['english', 'portuguese']  # Languages for stemmer and stop wor
 # === Retrieval Configuration ===
 RETRIEVAL_TOP_K = 40        # Number of candidates retrieved from FAISS + BM25
 RERANKER_TOP_N = 20         # Number of results kept after reranking
-PARENT_TOP_N = 10            # Max parent chunks returned after dedup (hierarchical mode only)
+PARENT_TOP_N = 15            # Max parent chunks returned after dedup (hierarchical mode only)
 
 # === FAISS Configuration ===
 FAISS_INDEX_TYPE = 'auto'  # Options: 'flat', 'ivf', 'hnsw', 'auto'
