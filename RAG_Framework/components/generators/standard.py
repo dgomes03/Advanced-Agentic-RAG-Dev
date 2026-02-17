@@ -11,7 +11,116 @@ from RAG_Framework.core.cache_manager import CacheManager
 from RAG_Framework.core.conversation_manager import ConversationManager
 
 
+_SKIP_SPECIAL = {'<s>', '</s>', '<unk>', '<pad>'}
+
+
 class Generator:
+    _byte_decoder = None  # Lazy-initialized inverse of GPT-2 bytes_to_unicode
+    _inv_vocab = None     # Lazy-initialized inverse vocabulary {id: string}
+    _special_ids = None   # Lazy-initialized set of special token IDs
+
+    @staticmethod
+    def _build_byte_decoder():
+        """Build the inverse of the GPT-2 byte-level BPE bytes_to_unicode mapping."""
+        bs = (
+            list(range(ord("!"), ord("~") + 1))
+            + list(range(ord("¡"), ord("¬") + 1))
+            + list(range(ord("®"), ord("ÿ") + 1))
+        )
+        cs = bs[:]
+        n = 0
+        for b in range(2**8):
+            if b not in bs:
+                bs.append(b)
+                cs.append(2**8 + n)
+                n += 1
+        return {chr(c): b for b, c in zip(bs, cs)}
+
+    @staticmethod
+    def _ensure_vocab(tokenizer):
+        """Lazily build and cache inverse vocabulary and special token set."""
+        if Generator._byte_decoder is None:
+            Generator._byte_decoder = Generator._build_byte_decoder()
+        if Generator._inv_vocab is None:
+            vocab = tokenizer.get_vocab()
+            Generator._inv_vocab = {v: k for k, v in vocab.items()}
+            special = set(getattr(tokenizer, 'all_special_ids', []))
+            if hasattr(tokenizer, 'added_tokens_encoder'):
+                special.update(tokenizer.added_tokens_encoder.values())
+            Generator._special_ids = special
+
+    @staticmethod
+    def _decode_tokens(tokenizer, tokens):
+        """Decode token IDs to text, bypassing tokenizer.decode() entirely.
+
+        Handles tokenizers where the BPE vocabulary uses Ġ (U+0120) as the
+        space marker but the decoder expects ▁ (U+2581), which causes
+        tokenizer.decode() to strip all spaces from output.
+        """
+        if not tokens:
+            return ""
+        Generator._ensure_vocab(tokenizer)
+
+        inv_vocab = Generator._inv_vocab
+        special_ids = Generator._special_ids
+        byte_decoder = Generator._byte_decoder
+
+        parts = []
+        byte_buf = bytearray()
+
+        for tok_id in tokens:
+            tok_str = inv_vocab.get(tok_id, '')
+
+            if tok_id in special_ids:
+                if byte_buf:
+                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
+                    byte_buf = bytearray()
+                if tok_str not in _SKIP_SPECIAL:
+                    parts.append(tok_str)
+            else:
+                for c in tok_str:
+                    if c == '\u2581':
+                        byte_buf.append(0x20)
+                    elif c in byte_decoder:
+                        byte_buf.append(byte_decoder[c])
+                    else:
+                        byte_buf.extend(c.encode('utf-8'))
+
+        if byte_buf:
+            parts.append(byte_buf.decode('utf-8', errors='ignore'))
+
+        return ''.join(parts)
+
+    @staticmethod
+    def _fix_bpe_artifacts(text):
+        """Post-process a string returned by generate() to fix BPE decoding artifacts.
+
+        When tokenizer.decode() has a decoder mismatch (e.g. Ministral), generate()
+        returns raw BPE chars like Ġ (space), Ċ (newline), ðŁĺĬ (emoji bytes).
+        Applies the GPT-2 byte decoder char-by-char to recover proper UTF-8 text.
+        Only activates when Ġ (U+0120) or ▁ (U+2581) artifacts are detected.
+        """
+        if '\u0120' not in text and '\u2581' not in text:
+            return text
+        if Generator._byte_decoder is None:
+            Generator._byte_decoder = Generator._build_byte_decoder()
+        byte_decoder = Generator._byte_decoder
+        byte_buf = bytearray()
+        parts = []
+        for c in text:
+            if c == '\u2581':
+                byte_buf.append(0x20)
+            elif c in byte_decoder:
+                byte_buf.append(byte_decoder[c])
+            else:
+                if byte_buf:
+                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
+                    byte_buf = bytearray()
+                parts.append(c)
+        if byte_buf:
+            parts.append(byte_buf.decode('utf-8', errors='ignore'))
+        return ''.join(parts)
+
     @staticmethod
     def _parse_tool_calls(response_text):
         """Parse tool calls from response text. Handles three formats:
@@ -125,10 +234,10 @@ class Generator:
             tool_result = Generator.google_custom_search(tool_args.get("query", ""))
         elif tool_name == "duckduckgo_search":
             tool_result = Generator.duckduckgo_search(
-                tool_args.get("query", ""), tool_args.get("max_results", 5))
+                tool_args.get("query", ""), tool_args.get("max_results", 8))
         elif tool_name == "fetch_url_content":
             tool_result = Generator.fetch_url_content(
-                tool_args.get("url", ""), tool_args.get("max_chars", 5000))
+                tool_args.get("url", ""), tool_args.get("max_chars", 8000))
         elif tool_name == "query_database":
             from RAG_Framework.components.database import get_sql_connector
             sql_connector = get_sql_connector()
@@ -166,17 +275,27 @@ class Generator:
         Captures verbose output from MLX generate() and emits tokens as they're generated.
         """
         if stream_callback is None:
-            # TODO: i dont like this too much. another approach needs to be done.
-            return generate(
-                model=model,
-                tokenizer=tokenizer,
-                prompt=prompt,
-                max_tokens=max_tokens,
-                sampler=sampler,
-                logits_processors=logits_processors,
-                prompt_cache=prompt_cache,
-                verbose=verbose
-            )
+            # Capture stdout so we can fix BPE artifacts in the verbose printout
+            # before the user sees it (generate() prints raw BPE chars directly).
+            old_stdout = sys.stdout
+            sys.stdout = _captured = io.StringIO()
+            try:
+                result = generate(
+                    model=model,
+                    tokenizer=tokenizer,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                    logits_processors=logits_processors,
+                    prompt_cache=prompt_cache,
+                    verbose=verbose
+                )
+            finally:
+                sys.stdout = old_stdout
+            fixed = Generator._fix_bpe_artifacts(result)
+            if verbose:
+                print(Generator._fix_bpe_artifacts(_captured.getvalue()), end='')
+            return fixed
 
         # Redirect stdout to capture verbose output
         old_stdout = sys.stdout
@@ -230,7 +349,7 @@ class Generator:
                             tool_call_found = True
                             to_emit = pending_buffer[:marker_idx]
                             if stream_callback and to_emit.strip():
-                                stream_callback('text_chunk', {'text': to_emit})
+                                stream_callback('text_chunk', {'text': Generator._fix_bpe_artifacts(to_emit)})
                             pending_buffer = ""
                         elif len(pending_buffer) > TOOL_MARKER_LEN:
                             # No marker yet - emit safe portion, keep tail buffered
@@ -238,7 +357,7 @@ class Generator:
                             safe = pending_buffer[:-TOOL_MARKER_LEN]
                             pending_buffer = pending_buffer[-TOOL_MARKER_LEN:]
                             if stream_callback and safe.strip():
-                                stream_callback('text_chunk', {'text': safe})
+                                stream_callback('text_chunk', {'text': Generator._fix_bpe_artifacts(safe)})
 
                     # Small delay to avoid busy waiting
                     time.sleep(0.01)
@@ -285,9 +404,9 @@ class Generator:
                 else:
                     to_emit = pending_buffer
                 if stream_callback and to_emit.strip():
-                    stream_callback('text_chunk', {'text': to_emit})
+                    stream_callback('text_chunk', {'text': Generator._fix_bpe_artifacts(to_emit)})
 
-            return result
+            return Generator._fix_bpe_artifacts(result)
 
         finally:
             # Restore stdout
@@ -343,9 +462,9 @@ class Generator:
                     if page_info and 'extract' in page_info:
                         content = page_info['extract'].strip()
                         words = content.split()
-                        if len(words) > 1000:
-                            content = ' '.join(words[:1000]) + '... (content truncated to 1000 words)'
-                            wordcount = 1000
+                        if len(words) > 2000:
+                            content = ' '.join(words[:2000]) + '... (content truncated to 2000 words)'
+                            wordcount = 2000
                         else:
                             wordcount = len(words)
                         articles.append({
@@ -388,7 +507,7 @@ class Generator:
                 return "No results found."
 
             results = []
-            for item in search_data['items'][:5]: # Limit to top 5 results
+            for item in search_data['items'][:8]: # Limit to top 8 results
                 title = item.get('title', 'No title')
                 snippet = item.get('snippet', 'No snippet')
                 link = item.get('link', 'No link')
@@ -399,7 +518,7 @@ class Generator:
             return f"Error performing Google Search: {str(e)}"
 
     @staticmethod
-    def duckduckgo_search(query: str, max_results: int = 5) -> dict:
+    def duckduckgo_search(query: str, max_results: int = 8) -> dict:
         """Search DuckDuckGo (free, no API key required)."""
         try:
             # Try the newer ddgs package first, fallback to duckduckgo_search
@@ -426,7 +545,7 @@ class Generator:
             return {'error': str(e), 'query': query}
 
     @staticmethod
-    def fetch_url_content(url: str, max_chars: int = 5000) -> dict:
+    def fetch_url_content(url: str, max_chars: int = 8000) -> dict:
         """Fetch and extract main text content from a URL."""
         try:
             import urllib.request
@@ -470,8 +589,8 @@ class Generator:
         tools = get_tools_for_standard_generator()
 
         # Temperature and top sampling
-        sampler = make_sampler(temp=0.1, top_p=0.9)
-        logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
+        sampler = make_sampler(temp=0.3, top_p=0.9)
+        logits_processors = make_logits_processors(repetition_penalty=1.0, repetition_context_size=128)
         current_response = None
 
         if conversation_manager is None:

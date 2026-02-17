@@ -1,6 +1,4 @@
 import json
-import random
-import string
 from mlx_lm import generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 
@@ -8,10 +6,123 @@ from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, MIN_CONFIDENCE_THRESH
 from RAG_Framework.core.conversation_manager import ConversationManager
 
 
-class AgenticGenerator:
+_SKIP_SPECIAL = {'<s>', '</s>', '<unk>', '<pad>'}
 
-    """Main agentic reasoning coordinator"""
-    
+
+class AgenticGenerator:
+    """Main agentic reasoning coordinator.
+
+    Orchestrates multi-step reasoning with planning, LLM-driven tool selection,
+    evaluation with information-gain tracking, dynamic replanning, and
+    streaming synthesis.
+    """
+
+    _byte_decoder = None  # Lazy-initialized inverse of GPT-2 bytes_to_unicode
+    _inv_vocab = None     # Lazy-initialized inverse vocabulary {id: string}
+    _special_ids = None   # Lazy-initialized set of special token IDs
+
+    @staticmethod
+    def _build_byte_decoder():
+        """Build the inverse of the GPT-2 byte-level BPE bytes_to_unicode mapping."""
+        bs = (
+            list(range(ord("!"), ord("~") + 1))
+            + list(range(ord("¡"), ord("¬") + 1))
+            + list(range(ord("®"), ord("ÿ") + 1))
+        )
+        cs = bs[:]
+        n = 0
+        for b in range(2**8):
+            if b not in bs:
+                bs.append(b)
+                cs.append(2**8 + n)
+                n += 1
+        return {chr(c): b for b, c in zip(bs, cs)}
+
+    @staticmethod
+    def _ensure_vocab(tokenizer):
+        """Lazily build and cache inverse vocabulary and special token set."""
+        if AgenticGenerator._byte_decoder is None:
+            AgenticGenerator._byte_decoder = AgenticGenerator._build_byte_decoder()
+        if AgenticGenerator._inv_vocab is None:
+            vocab = tokenizer.get_vocab()
+            AgenticGenerator._inv_vocab = {v: k for k, v in vocab.items()}
+            special = set(getattr(tokenizer, 'all_special_ids', []))
+            if hasattr(tokenizer, 'added_tokens_encoder'):
+                special.update(tokenizer.added_tokens_encoder.values())
+            AgenticGenerator._special_ids = special
+
+    @staticmethod
+    def _decode_tokens(tokenizer, tokens):
+        """Decode token IDs to text, bypassing tokenizer.decode() entirely.
+
+        Handles tokenizers where the BPE vocabulary uses Ġ (U+0120) as the
+        space marker but the decoder expects ▁ (U+2581), which causes
+        tokenizer.decode() to strip all spaces from output.
+        """
+        if not tokens:
+            return ""
+        AgenticGenerator._ensure_vocab(tokenizer)
+
+        inv_vocab = AgenticGenerator._inv_vocab
+        special_ids = AgenticGenerator._special_ids
+        byte_decoder = AgenticGenerator._byte_decoder
+
+        parts = []
+        byte_buf = bytearray()
+
+        for tok_id in tokens:
+            tok_str = inv_vocab.get(tok_id, '')
+
+            if tok_id in special_ids:
+                if byte_buf:
+                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
+                    byte_buf = bytearray()
+                if tok_str not in _SKIP_SPECIAL:
+                    parts.append(tok_str)
+            else:
+                for c in tok_str:
+                    if c == '\u2581':
+                        byte_buf.append(0x20)
+                    elif c in byte_decoder:
+                        byte_buf.append(byte_decoder[c])
+                    else:
+                        byte_buf.extend(c.encode('utf-8'))
+
+        if byte_buf:
+            parts.append(byte_buf.decode('utf-8', errors='ignore'))
+
+        return ''.join(parts)
+
+    @staticmethod
+    def _fix_bpe_artifacts(text):
+        """Post-process a string returned by generate() to fix BPE decoding artifacts.
+
+        When tokenizer.decode() has a decoder mismatch (e.g. Ministral), generate()
+        returns raw BPE chars like Ġ (space), Ċ (newline), ðŁĺĬ (emoji bytes).
+        Applies the GPT-2 byte decoder char-by-char to recover proper UTF-8 text.
+        Only activates when Ġ (U+0120) or ▁ (U+2581) artifacts are detected.
+        """
+        if '\u0120' not in text and '\u2581' not in text:
+            return text
+        if AgenticGenerator._byte_decoder is None:
+            AgenticGenerator._byte_decoder = AgenticGenerator._build_byte_decoder()
+        byte_decoder = AgenticGenerator._byte_decoder
+        byte_buf = bytearray()
+        parts = []
+        for c in text:
+            if c == '\u2581':
+                byte_buf.append(0x20)
+            elif c in byte_decoder:
+                byte_buf.append(byte_decoder[c])
+            else:
+                if byte_buf:
+                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
+                    byte_buf = bytearray()
+                parts.append(c)
+        if byte_buf:
+            parts.append(byte_buf.decode('utf-8', errors='ignore'))
+        return ''.join(parts)
+
     @staticmethod
     def agentic_answer_query(
         query: str,
@@ -19,373 +130,407 @@ class AgenticGenerator:
         llm_tokenizer,
         retriever,
         prompt_cache=None,
-        conversation_manager=None
+        conversation_manager=None,
+        stream_callback=None
     ) -> str:
         """
-        Main agentic loop with multi-step reasoning, evaluation, and replanning
+        Main agentic loop with multi-step reasoning, evaluation, and replanning.
+
+        Uses Generator._execute_tool() for all tool execution (no duplication),
+        streams events to the frontend, and synthesises a final answer using
+        the shared conversation manager and KV-cache.
         """
-        # Import here to avoid circular dependency
         from RAG_Framework.agents import AgenticPlanner, AgenticEvaluator
         from RAG_Framework.components.generators import Generator
+        from RAG_Framework.agents.tools import get_tools_for_standard_generator
 
         print(f"\n{'='*60}")
-        print(f"QUERY: {query}")
+        print(f"AGENTIC REASONING: {query}")
         print(f"{'='*60}\n")
 
-        # Step 1: Create initial plan
+        # ── Step 1: Create initial plan ──────────────────────────────
         print("Creating reasoning plan...")
         plan = AgenticPlanner.create_initial_plan(query, llm_model, llm_tokenizer)
-        
+
+        if stream_callback:
+            stream_callback('reasoning_step', {
+                'step': 0,
+                'total_steps': MAX_REASONING_STEPS,
+                'goal': 'Planning complete',
+                'strategy': 'planning',
+                'goals': [{'description': g.description, 'priority': g.priority, 'strategy': g.strategy}
+                          for g in plan.goals]
+            })
+
+        # Track all retrieved contexts for information-gain comparison
+        all_previous_contexts = []
         reasoning_step = 0
-        max_steps = MAX_REASONING_STEPS
-        
-        # Step 2: Iterative reasoning loop
-        while reasoning_step < max_steps:
+
+        # ── Step 2: Iterative reasoning loop ─────────────────────────
+        while reasoning_step < MAX_REASONING_STEPS:
             reasoning_step += 1
-            print(f"\n{'─'*60}")
-            print(f"REASONING STEP {reasoning_step}/{max_steps}")
-            print(f"{'─'*60}")
-            
-            # Get next goal to work on
+
+            # Get next pending goal
             current_goal = plan.get_next_goal()
-            
             if current_goal is None:
                 print("All goals completed!")
                 break
-            
-            print(f"Current Goal: {current_goal.description}")
-            print(f"Priority: {current_goal.priority} | Status: {current_goal.status}")
-            
-            # Mark goal as in progress
+
+            print(f"\n{'─'*60}")
+            print(f"REASONING STEP {reasoning_step}/{MAX_REASONING_STEPS}")
+            print(f"Goal: {current_goal.description}")
+            print(f"Priority: {current_goal.priority} | Strategy: {current_goal.strategy}")
+            print(f"{'─'*60}")
+
             current_goal.status = "in_progress"
-            
-            # Step 3: Search for information
-            print(f"\nSearching for relevant information...")
+
+            if stream_callback:
+                stream_callback('reasoning_step', {
+                    'step': reasoning_step,
+                    'total_steps': MAX_REASONING_STEPS,
+                    'goal': current_goal.description,
+                    'strategy': current_goal.strategy
+                })
+
+            # ── Step 2b: Retrieve via LLM tool-calling ───────────────
             try:
-                retrieved_context, _ = AgenticGenerator.available_tools(current_goal.description, llm_model, llm_tokenizer, retriever)
+                retrieved_context = AgenticGenerator._retrieve_for_goal(
+                    goal=current_goal,
+                    llm_model=llm_model,
+                    llm_tokenizer=llm_tokenizer,
+                    retriever=retriever,
+                    stream_callback=stream_callback
+                )
+
                 if retrieved_context:
                     current_goal.retrieved_info.append(retrieved_context)
-                    print(f"Retrieved {len(retrieved_context)} characters of context")
+                    print(f"\n[RETRIEVE] Retrieved {len(retrieved_context)} characters of context")
+                    print(f"[RETRIEVE] Preview: {retrieved_context[:300]}...")
                 else:
-                    print("No context retrieved (empty response)")
-                    retrieved_context = ""  # Ensure it's a string for downstream use
+                    print("[RETRIEVE] No context retrieved (empty response)")
+                    retrieved_context = ""
             except Exception as e:
-                print(f"Search failed: {e}")
+                print(f"[RETRIEVE] Search failed: {e}")
+                import traceback
+                traceback.print_exc()
                 current_goal.status = "failed"
                 continue
-            
-            # Step 4: Evaluate goal completion
-            print(f"\nEvaluating goal completion...")
-            evaluation = AgenticEvaluator.evaluate_goal_completion(
+
+            if stream_callback:
+                stream_callback('reasoning_retrieval', {
+                    'goal': current_goal.description,
+                    'chars_retrieved': len(retrieved_context),
+                    'preview': retrieved_context[:200] if retrieved_context else ""
+                })
+
+            # ── Step 2c: Evaluate with information gain ──────────────
+            print(f"\n[EVAL] Evaluating goal completion...")
+            evaluation = AgenticEvaluator.evaluate_goal_completion_with_gain(
                 current_goal,
                 retrieved_context,
+                all_previous_contexts,
                 llm_model,
                 llm_tokenizer
             )
-            
+
             current_goal.confidence = evaluation.get("confidence", 0.5)
-            
-            print(f"Complete: {evaluation.get('is_complete', False)}")
-            print(f"Confidence: {current_goal.confidence:.2f}")
-            print(f"Reasoning: {evaluation.get('reasoning', 'N/A')}")
-            
-            if evaluation.get("missing_aspects"):
-                print(f"Missing: {', '.join(evaluation.get('missing_aspects', []))}")
-            
-            # Update goal status based on evaluation
+            info_gain = evaluation.get("information_gain", 0.5)
+            sparse = evaluation.get("sparse_results", False)
+            contradictory = evaluation.get("contradictory_info", False)
+
+            print(f"[EVAL] Complete: {evaluation.get('is_complete', False)}")
+            print(f"[EVAL] Confidence: {current_goal.confidence:.2f}")
+            print(f"[EVAL] Information gain: {info_gain:.2f}")
+            print(f"[EVAL] Sparse: {sparse} | Contradictory: {contradictory}")
+            print(f"[EVAL] Reasoning: {evaluation.get('reasoning', 'N/A')}")
+
+            if stream_callback:
+                stream_callback('reasoning_evaluation', {
+                    'confidence': current_goal.confidence,
+                    'information_gain': info_gain,
+                    'is_complete': evaluation.get('is_complete', False),
+                    'sparse_results': sparse,
+                    'contradictory_info': contradictory,
+                    'reasoning': evaluation.get('reasoning', '')
+                })
+
+            # Add to previous contexts for future info-gain comparison
+            if retrieved_context:
+                all_previous_contexts.append(retrieved_context)
+
+            # Update goal status
             if evaluation.get("is_complete", False) and current_goal.confidence >= MIN_CONFIDENCE_THRESHOLD:
                 current_goal.status = "completed"
-                print(f"Goal completed successfully!")
-            elif current_goal.confidence < MIN_CONFIDENCE_THRESHOLD:
-                print(f"Low confidence - may need more information")
-                current_goal.status = "completed"  # Move on but flag low confidence
+                print(f"[EVAL] Goal completed successfully!")
             else:
-                current_goal.status = "completed"  # Mark as done even if not perfect
-            
-            # Step 5: Check overall progress and decide if replanning needed
-            print(f"\nOverall Progress: {plan.get_completion_rate()*100:.0f}% complete")
-            
-            # Evaluate overall completeness
-            if plan.get_completion_rate() >= 0.5:  # Check after 50% completion
-                print(f"\nEvaluating overall completeness...")
-                overall_eval = AgenticEvaluator.evaluate_overall_completeness(
-                    plan,
-                    llm_model,
-                    llm_tokenizer
-                )
-                
-                print(f"Can answer: {overall_eval.get('can_answer', False)}")
-                print(f"Overall confidence: {overall_eval.get('overall_confidence', 0):.2f}")
-                print(f"Assessment: {overall_eval.get('coverage_assessment', 'N/A')}")
-                
-                # Step 6: Autonomous stopping decision
-                if overall_eval.get("can_answer", False) and overall_eval.get("overall_confidence", 0) >= MIN_CONFIDENCE_THRESHOLD:
-                    print(f"\nAUTONOMOUS STOP: Sufficient information gathered")
-                    print(f"Confidence threshold met: {overall_eval.get('overall_confidence', 0):.2f} >= {MIN_CONFIDENCE_THRESHOLD}")
-                    break
-                
-                # Step 7: Dynamic replanning if needed
-                if overall_eval.get("needs_more_search", False) and reasoning_step < max_steps - 1:
-                    print(f"\nReplanning needed...")
-                    plan = AgenticPlanner.replan(plan, overall_eval, llm_model, llm_tokenizer)
-        
-        # Step 8: Generate final answer
+                # Mark as completed but with low confidence — move on
+                current_goal.status = "completed"
+                print(f"[EVAL] Goal marked completed (confidence: {current_goal.confidence:.2f})")
+
+            # ── Step 2d: Autonomous stop checks ──────────────────────
+            # Check 1: All goals have high confidence
+            all_confident = all(
+                g.confidence >= MIN_CONFIDENCE_THRESHOLD
+                for g in plan.goals if g.status == "completed"
+            ) and plan.is_complete()
+
+            if all_confident and plan.is_complete():
+                print(f"\nAUTONOMOUS STOP: All goals completed with sufficient confidence")
+                break
+
+            # Check 2: Information gain too low (no new info)
+            if info_gain < 0.1 and reasoning_step > 1:
+                print(f"\nAUTONOMOUS STOP: Information gain too low ({info_gain:.2f})")
+                break
+
+            # ── Step 2e: Replan if needed ────────────────────────────
+            completion_rate = plan.get_completion_rate()
+            if completion_rate >= 0.5 and not plan.is_complete():
+                # Check if confidence is below threshold — trigger replan
+                avg_confidence = sum(
+                    g.confidence for g in plan.goals if g.status == "completed"
+                ) / max(1, sum(1 for g in plan.goals if g.status == "completed"))
+
+                if avg_confidence < MIN_CONFIDENCE_THRESHOLD or sparse or contradictory:
+                    print(f"\n[REPLAN] Replanning (avg confidence: {avg_confidence:.2f}, sparse: {sparse}, contradictory: {contradictory})...")
+                    plan = AgenticPlanner.replan(plan, evaluation, llm_model, llm_tokenizer)
+
+                    if stream_callback:
+                        stream_callback('reasoning_replan', {
+                            'action': 'replan',
+                            'new_goals': [g.description for g in plan.goals if g.status == "pending"],
+                            'reasoning': evaluation.get('reasoning', '')
+                        })
+
+        # ── Step 3: Synthesize final answer ──────────────────────────
         print(f"\n{'='*60}")
-        print(f"GENERATING FINAL ANSWER")
+        print(f"SYNTHESIZING FINAL ANSWER")
         print(f"{'='*60}")
 
-        current_response = Generator.answer_query_with_llm(
-            query, llm_model, llm_tokenizer, retriever,
+        response = AgenticGenerator._synthesize_answer(
+            query=query,
+            plan=plan,
+            llm_model=llm_model,
+            llm_tokenizer=llm_tokenizer,
+            conversation_manager=conversation_manager,
             prompt_cache=prompt_cache,
-            conversation_manager=conversation_manager
+            stream_callback=stream_callback
         )
-        
 
-        return current_response
-    
+        return response
+
     @staticmethod
-    def available_tools(query, llm_model, llm_tokenizer, retriever, prompt_cache=None):
-        # Import here to avoid circular dependency
+    def _retrieve_for_goal(goal, llm_model, llm_tokenizer, retriever, stream_callback=None):
+        """Use LLM tool-calling to retrieve information for a single goal.
+
+        Builds a mini conversation, lets the LLM pick the right tool(s),
+        executes via Generator._execute_tool(), and returns the combined
+        retrieval results as a string.
+        """
         from RAG_Framework.components.generators import Generator
-        from RAG_Framework.agents.tools import get_tools_for_agentic_generator
+        from RAG_Framework.agents.tools import get_tools_for_standard_generator
 
-        tools = get_tools_for_agentic_generator()
+        tools = get_tools_for_standard_generator()
 
-        # Temperature and top sampling
-        sampler = make_sampler(temp=0.7, top_k=50, top_p=0.9)
-        logits_processors = make_logits_processors(repetition_penalty=1.1, repetition_context_size=128)
-        current_response = None
+        system_prompt = (
+            "You are a research assistant. For the given research goal, call the most appropriate tool "
+            "to find the information needed. Pick ONE tool and call it with appropriate arguments.\n\n"
+            "TOOL PRIORITY: search_documents > query_database > duckduckgo_search > search_wikipedia > google_custom_search\n\n"
+            "Call the tool now — do not write explanatory text."
+        )
 
-        # Enhanced system prompt to guide tool selection
         conversation = [
-            {"role": "system", "content": (
-                "You are an analytical research assistant with multi-step reasoning.\n\n"
-                "REASONING APPROACH:\n"
-                "1. DECOMPOSE: Break complex questions into sub-questions\n"
-                "2. SEARCH SYSTEMATICALLY: Address each information need\n"
-                "3. SYNTHESIZE: Combine findings with explicit citations [DocName, p.X]\n"
-                "4. EVALUATE: Check completeness before answering\n\n"
-                "TOOL PRIORITY: search_documents > retrieve_document > wikipedia > google\n\n"
-                "CITATION RULES:\n"
-                "- Document: [DocName, p.X]\n"
-                "- Wikipedia: [Wikipedia: Article]\n"
-                "- Web: [Web: domain.com]\n\n"
-                "If information is incomplete, state what was found and what remains unknown. "
-                "You may call multiple tools in parallel when the query requires different information sources."
-            )}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Research goal: {goal.description}"}
         ]
 
-        # Add current query
-        conversation.append({"role": "user", "content": query})
-        
-        while True: ############### este loop é mesmo necessário? ##################
-            prompt = llm_tokenizer.apply_chat_template(
-                conversation,
-                add_generation_prompt=True,
-                tools=tools,
-                tokenize=False
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tools=tools,
+            tokenize=False
+        )
+
+        print(f"\n[TOOL_SELECT] Formatted prompt:\n{prompt}")
+
+        # Short generation — we only need a tool call (~100 tokens)
+        response = generate(
+            model=llm_model,
+            tokenizer=llm_tokenizer,
+            prompt=prompt,
+            max_tokens=200,
+            verbose=True
+        )
+
+        response_text = AgenticGenerator._fix_bpe_artifacts(response.strip())
+        print(f"\n[TOOL_SELECT] Raw LLM response:\n{repr(response_text)}")
+
+        # If no tool call, fall back to duckduckgo_search (not search_documents,
+        # which would trigger embedding model loading)
+        if "[TOOL_CALLS]" not in response_text:
+            print(f"[TOOL_SELECT] No tool call from LLM, falling back to duckduckgo_search")
+            result = Generator._execute_tool(
+                "duckduckgo_search",
+                {"query": goal.description},
+                retriever, llm_model, llm_tokenizer
             )
+            return result
 
-            #print("\nFORMATTED PROMPT:") 
-            #print(prompt)
+        # Parse and execute tool calls
+        try:
+            tool_calls = Generator._parse_tool_calls(response_text)
+            print(f"[TOOL_SELECT] Parsed tool calls: {tool_calls}")
 
-            response = generate(
-                model=llm_model,
-                tokenizer=llm_tokenizer,
-                prompt=prompt,
-                max_tokens=MAX_RESPONSE_TOKENS,
-                sampler=sampler,
-                logits_processors=logits_processors,
-                prompt_cache=prompt_cache,
-                verbose=True
+            if not tool_calls:
+                print(f"[TOOL_SELECT] No valid tool calls parsed, falling back to duckduckgo_search")
+                result = Generator._execute_tool(
+                    "duckduckgo_search",
+                    {"query": goal.description},
+                    retriever, llm_model, llm_tokenizer
+                )
+                return result
+
+            # Execute each tool call and collect results
+            all_results = []
+            for call in tool_calls:
+                tool_name = call.get("name", "")
+                tool_args = call.get("arguments", {})
+
+                # Ensure arguments is a dict
+                if isinstance(tool_args, str):
+                    try:
+                        tool_args = json.loads(tool_args)
+                    except json.JSONDecodeError:
+                        tool_args = {"query": tool_args}
+
+                # Strategy override: if goal.strategy == "bm25_only" and tool is search_documents,
+                # override to use keyword-only search
+                if tool_name == "search_documents" and goal.strategy == "bm25_only":
+                    print(f"[TOOL_EXEC] Executing: {tool_name} (BM25-only override) with args: {tool_args}")
+                    query_str = tool_args.get("query", goal.description)
+                    result = retriever.search_documents_tool(query_str, weight_dense=0.0, weight_sparse=1.0)
+                    if not isinstance(result, str):
+                        result = json.dumps(result, ensure_ascii=False)
+                elif tool_name == "search_documents" and goal.strategy == "dense_only":
+                    print(f"[TOOL_EXEC] Executing: {tool_name} (dense-only override) with args: {tool_args}")
+                    query_str = tool_args.get("query", goal.description)
+                    result = retriever.search_documents_tool(query_str, weight_dense=1.0, weight_sparse=0.0)
+                    if not isinstance(result, str):
+                        result = json.dumps(result, ensure_ascii=False)
+                else:
+                    print(f"[TOOL_EXEC] Executing: {tool_name} with args: {tool_args}")
+                    result = Generator._execute_tool(
+                        tool_name, tool_args, retriever, llm_model, llm_tokenizer
+                    )
+
+                print(f"[TOOL_EXEC] Result preview ({len(result)} chars): {result[:300]}...")
+                all_results.append(result)
+
+            return "\n---\n".join(all_results)
+
+        except Exception as e:
+            print(f"[TOOL_SELECT] Error parsing/executing tool calls: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to duckduckgo (avoids loading embedding models)
+            print(f"[TOOL_SELECT] Falling back to duckduckgo_search")
+            result = Generator._execute_tool(
+                "duckduckgo_search",
+                {"query": goal.description},
+                retriever, llm_model, llm_tokenizer
             )
+            return result
 
-            response_text = response.strip()
+    @staticmethod
+    def _synthesize_answer(query, plan, llm_model, llm_tokenizer,
+                           conversation_manager, prompt_cache, stream_callback):
+        """Build a synthesis prompt from all accumulated context and generate
+        the final answer with streaming.
 
-            # tool call present?
-            if "[TOOL_CALLS]" in response_text:
-                print(f"\nModel requested to use tools. Processing tool calls...")
-                try:
-                    tool_calls = []
-                    
-                    # Check which format we're dealing with
-                    if "[TOOL_CALLS][" in response_text:
-                        # OLD FORMAT: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
-                        start_marker = "[TOOL_CALLS]["
-                        start_idx = response_text.find(start_marker) + len(start_marker) - 1
-                        bracket_count = 1
-                        end_idx = start_idx + 1
-                        while end_idx < len(response_text) and bracket_count > 0:
-                            if response_text[end_idx] == '[':
-                                bracket_count += 1
-                            elif response_text[end_idx] == ']':
-                                bracket_count -= 1
-                            end_idx += 1
-                        tool_json = response_text[start_idx:end_idx]
-                        tool_calls = json.loads(tool_json)
-                        
-                    elif "[ARGS]" in response_text:
-                        # NEW FORMAT: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
-                        # Handle multiple tool calls by finding all [TOOL_CALLS]...[ARGS]... patterns
-                        import re
-                        tool_pattern = re.compile(r'\[TOOL_CALLS\]([^\[]+)\[ARGS\]')
-                        matches = list(tool_pattern.finditer(response_text))
+        Does NOT call answer_query_with_llm() (which would retrieve again).
+        Instead, injects all gathered context directly and generates.
+        """
+        from RAG_Framework.components.generators import Generator
+        from RAG_Framework.core.cache_manager import CacheManager
 
-                        for match in matches:
-                            tool_name = match.group(1).strip()
-                            args_start = match.end()
-                            args_part = response_text[args_start:].strip()
+        # Build context from all goals' retrieved_info
+        synthesis_context = ""
+        for goal in plan.goals:
+            for info in goal.retrieved_info:
+                if isinstance(info, str):
+                    synthesis_context += info + "\n---\n"
+                elif isinstance(info, tuple):
+                    synthesis_context += str(info[0]) + "\n---\n"
+                else:
+                    synthesis_context += str(info) + "\n---\n"
 
-                            # Extract JSON object
-                            brace_count = 0
-                            end_idx = 0
-                            for i, char in enumerate(args_part):
-                                if char == '{':
-                                    brace_count += 1
-                                elif char == '}':
-                                    brace_count -= 1
-                                    if brace_count == 0:
-                                        end_idx = i + 1
-                                        break
+        # Truncate context to avoid exceeding model limits
+        if len(synthesis_context) > 8000:
+            synthesis_context = synthesis_context[:8000] + "\n...(truncated)"
 
-                            args_json = args_part[:end_idx] if end_idx > 0 else "{}"
-                            tool_args = json.loads(args_json) if args_json else {}
-                            tool_calls.append({"name": tool_name, "arguments": tool_args})
-                    
-                    else:
-                        print("Unknown tool call format")
-                        break
+        print(f"\n[SYNTHESIS] Total context: {len(synthesis_context)} chars from {sum(len(g.retrieved_info) for g in plan.goals)} retrievals")
+        print(f"[SYNTHESIS] Context preview:\n{synthesis_context[:500]}...")
 
-                    if not tool_calls:
-                        print("No valid tool calls found")
-                        break
+        # Build user message with context + query
+        user_msg = (
+            f"Based on the following retrieved information, answer the query.\n\n"
+            f"RETRIEVED INFORMATION:\n{synthesis_context}\n\n"
+            f"QUERY: {query}\n\n"
+            f"Answer using ONLY the retrieved information above. Cite sources."
+        )
 
-                    print(f"Found {len(tool_calls)} tool call(s): {[call.get('name', 'unknown') for call in tool_calls]}")
+        # Use existing conversation manager or create a new one
+        if conversation_manager is None:
+            conversation_manager = ConversationManager()
 
-                    # Add tool call to conversation
-                    formatted_tool_calls = []
-                    for call in tool_calls:
-                        call_id = ''.join(random.choices(string.ascii_letters + string.digits, k=9))
-                        # Handle different argument structures for different tools
-                        if isinstance(call.get("arguments"), dict):
-                            arguments_str = json.dumps(call["arguments"])
-                        elif isinstance(call.get("arguments"), str):
-                            try:
-                                # Try to parse as JSON first
-                                parsed_args = json.loads(call["arguments"])
-                                arguments_str = call["arguments"]
-                            except json.JSONDecodeError:
-                                # If it's a string, create appropriate JSON based on tool
-                                tool_name = call.get("name", "")
-                                if tool_name in ["search_documents", "search_wikipedia"]:
-                                    arguments_str = json.dumps({"query": call["arguments"]})
-                                elif tool_name == "retrieve_document_by_name":
-                                    arguments_str = json.dumps({"document_name": call["arguments"]})
-                                else:
-                                    arguments_str = json.dumps({"query": str(call.get("arguments", ""))})
-                        else:
-                            arguments_str = "{}"
+        conversation_manager.add_user_message(user_msg)
 
-                        formatted_tool_calls.append({
-                            "id": call_id,
-                            "function": {
-                                "name": call["name"],
-                                "arguments": arguments_str
-                            },
-                            "type": "function"
-                        })
+        # Generate with streaming using the shared infrastructure
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation_manager.get_conversation(),
+            add_generation_prompt=True,
+            tokenize=False
+        )
 
-                    # Add to conversation
-                    conversation.append({
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": formatted_tool_calls
-                    })
+        print(f"\n[SYNTHESIS] Formatted prompt:\n{prompt[:500]}...(truncated)")
 
-                    # Execute tools sequentially
-                    tool_results = []
-                    for i, tool_call in enumerate(formatted_tool_calls):
-                        tool_name = tool_call["function"]["name"]
-                        args_str = tool_call["function"]["arguments"]
-                        try:
-                            tool_args = json.loads(args_str)
-                        except json.JSONDecodeError as e:
-                            tool_result = f"Tool call error: Invalid arguments format - {str(e)}"
-                        else:
-                            print(f"Executing tool {i+1}/{len(formatted_tool_calls)}: {tool_name} with args: {tool_args}")
-                            # Execute the appropriate tool with proper argument extraction
-                            if tool_name == "search_documents":
-                                query_str = tool_args.get("query", "")
-                                tool_result = retriever.search_documents_tool(query_str)
-                            elif tool_name == "retrieve_document_by_name":
-                                doc_name = tool_args.get("document_name", "")
-                                tool_result = retriever.retrieve_document_by_name_tool(doc_name)
-                            elif tool_name == "list_available_documents":
-                                filter_keyword = tool_args.get("filter_keyword", "")
-                                tool_result = retriever.list_available_documents_tool(filter_keyword)
-                            elif tool_name == "search_wikipedia":
-                                query_str = tool_args.get("query", "")
-                                tool_result = Generator.search_wikipedia(query_str)
-                            elif tool_name == "agentic_generator":
-                                query_str = tool_args.get("query", "")
-                                tool_result = AgenticGenerator.agentic_answer_query(query_str, llm_model, llm_tokenizer, retriever)
-                            elif tool_name == "google_custom_search":
-                                query_str = tool_args.get("query", "")
-                                tool_result = Generator.google_custom_search(query_str)
-                            elif tool_name == "query_database":
-                                from RAG_Framework.components.database import get_sql_connector
-                                sql_connector = get_sql_connector()
-                                if sql_connector is None:
-                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
-                                else:
-                                    db_name = tool_args.get("db_name", "")
-                                    sql_query = tool_args.get("sql_query", "")
-                                    tool_result = sql_connector.execute_query(db_name, sql_query)
-                            elif tool_name == "list_databases":
-                                from RAG_Framework.components.database import get_sql_connector
-                                sql_connector = get_sql_connector()
-                                if sql_connector is None:
-                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
-                                else:
-                                    tool_result = sql_connector.list_databases()
-                            elif tool_name == "get_database_schema":
-                                from RAG_Framework.components.database import get_sql_connector
-                                sql_connector = get_sql_connector()
-                                if sql_connector is None:
-                                    tool_result = {"success": False, "error": "SQL databases are not configured"}
-                                else:
-                                    db_name = tool_args.get("db_name", "")
-                                    tool_result = sql_connector.get_schema(db_name)
-                            else:
-                                tool_result = f"Error: Unknown tool: {tool_name}"
+        sampler = make_sampler(temp=0.3, top_p=0.9)
+        logits_processors = make_logits_processors(repetition_penalty=1.0)
 
-                        # Convert result to string if it's not already
-                        if not isinstance(tool_result, str):
-                            tool_result = json.dumps(tool_result, ensure_ascii=False)
+        # Handle KV-cache: tokenize and pass only new tokens if cache is warm
+        full_tokens = llm_tokenizer.encode(prompt, add_special_tokens=False)
+        cache_offset = prompt_cache[0].offset if prompt_cache and len(prompt_cache) > 0 else 0
 
-                        #print(tool_result) # mostrar resultados da tool use antes de resposta
+        print(f"[SYNTHESIS] Full prompt tokens: {len(full_tokens)}, Cache offset: {cache_offset}")
 
-                        # Add tool result to conversation
-                        conversation.append({
-                            "role": "tool",
-                            "name": tool_name,
-                            "content": tool_result,
-                            "tool_call_id": tool_call["id"]
-                        })
-                        tool_results.append(tool_result)
+        if cache_offset > 0 and cache_offset < len(full_tokens):
+            prompt_tokens = full_tokens[cache_offset:]
+            print(f"[SYNTHESIS] Passing {len(prompt_tokens)} new tokens (cache hit)")
+        else:
+            prompt_tokens = full_tokens
+            if cache_offset > 0:
+                print(f"[SYNTHESIS] Cache invalidated (offset {cache_offset} >= prompt {len(full_tokens)}), resetting")
+                for layer in prompt_cache:
+                    if layer.offset > 0:
+                        layer.trim(layer.offset)
 
-                    print("All tool executions completed. Preparing final response...")
-                    # Continue to next iteration to generate final response
-                    continue
-                except Exception as e:
-                    print(f"Error processing tool calls: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
-                    break
-            else:
-                # No tool calls needed, return the response
-                print("No tool calls detected, returning response")
-                return response_text, prompt
-        # If we reach maximum iterations or break due to error, return empty response
-        print(f"Fatal Error: Tool processing loop ended unexpectedly")
-        return "", prompt
+        response = Generator._generate_with_streaming(
+            model=llm_model,
+            tokenizer=llm_tokenizer,
+            prompt=prompt_tokens,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            sampler=sampler,
+            logits_processors=logits_processors,
+            prompt_cache=prompt_cache,
+            stream_callback=stream_callback
+        )
+
+        response_text = response.strip()
+        print(f"\n[SYNTHESIS] Response length: {len(response_text)} chars")
+        conversation_manager.add_assistant_message(response_text)
+
+        # Log cache stats
+        if prompt_cache is not None:
+            CacheManager.log_cache_stats(prompt_cache, f"After agentic synthesis (turn {conversation_manager.get_turn_count()})")
+
+        return response_text

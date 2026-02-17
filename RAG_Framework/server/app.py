@@ -398,7 +398,8 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                     llm_tokenizer=rag_system.llm_tokenizer,
                     retriever=rag_system,
                     prompt_cache=prompt_cache,
-                    conversation_manager=conversation_manager
+                    conversation_manager=conversation_manager,
+                    stream_callback=stream_callback
                 )
             elif REASONING_MODEL:
                 from RAG_Framework.components.generators.LRM import LRMGenerator

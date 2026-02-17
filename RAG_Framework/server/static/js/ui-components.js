@@ -65,6 +65,7 @@ class UIComponents {
 
         const card = clone.querySelector('.tool-card');
         card.setAttribute('data-tool-id', toolData.tool_id);
+        card.setAttribute('data-tool-name', toolData.tool_name);
 
         // Set tool icon with SVG
         const iconElement = card.querySelector('.tool-icon');
@@ -430,6 +431,76 @@ class UIComponents {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // ===== Waiting Messages =====
+
+    static _waitingMessages = [
+        'Searching...', 'Contemplating...', 'Brainstorming...', "Nerding...", "Main character moment...", 
+        'Thinking...', 'Manifesting...', 'Questioning...', "Cooking...", "Slaying...", "Voguing...",
+        'Becoming sentient...', 'Lowkey figuring it out...', 'Existential crisis mode...', 
+        'Channeling big brain energy...', 'Reading the room...', 'Powering up...', 'Consulting the oracle...',
+        'Spilling the tea...', 'Serving logic...', 'Flexing neural networks...', 'Hacking the mainframe...',
+        'Manifesting excellence...', 'Entering the simulation...', 'A reestruturar tudo...', 
+        'A pensar muito...', 'Consultando o universo...', 'A atingir o pico...',
+        'A queimar neurónios...', 'A sentir a frequência...', 'Momento de génio...',
+        'A meditar profundamente...', 'A conjurar ideias...', 'A sondar o terreno...', 'A improvisar...',
+        'A desvendar mistérios...', 'A entrar na simulação...'
+    ];
+    static _waitingIntervals = {};
+
+    /**
+     * Start showing rotating waiting messages in the assistant bubble
+     */
+    static startWaitingMessages(messageId) {
+        const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageContent) return;
+
+        // Create the waiting message element
+        const waitingEl = document.createElement('span');
+        waitingEl.className = 'waiting-message';
+        waitingEl.setAttribute('data-waiting-for', messageId);
+
+        // Pick a random initial message
+        const msgs = this._waitingMessages;
+        waitingEl.textContent = msgs[Math.floor(Math.random() * msgs.length)];
+
+        messageContent.appendChild(waitingEl);
+
+        // Rotate messages every 5 seconds with dissolve animation
+        const interval = setInterval(() => {
+            waitingEl.classList.add('dissolve-out');
+
+            setTimeout(() => {
+                // Pick a different random message
+                let next;
+                do {
+                    next = msgs[Math.floor(Math.random() * msgs.length)];
+                } while (next === waitingEl.textContent && msgs.length > 1);
+
+                waitingEl.textContent = next;
+                waitingEl.classList.remove('dissolve-out');
+            }, 500); // matches dissolveOut duration
+        }, 5000);
+
+        this._waitingIntervals[messageId] = interval;
+    }
+
+    /**
+     * Instantly remove the waiting message (called when LLM starts streaming)
+     */
+    static stopWaitingMessages(messageId) {
+        // Clear the rotation interval
+        if (this._waitingIntervals[messageId]) {
+            clearInterval(this._waitingIntervals[messageId]);
+            delete this._waitingIntervals[messageId];
+        }
+
+        // Remove the element instantly
+        const waitingEl = document.querySelector(`[data-waiting-for="${messageId}"]`);
+        if (waitingEl) {
+            waitingEl.remove();
+        }
     }
 }
 

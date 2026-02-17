@@ -67,7 +67,8 @@ class ReasoningGoal:
     status: str = "pending"  # pending, in_progress, completed, failed
     retrieved_info: List[str] = field(default_factory=list)
     confidence: float = 0.0
-    
+    strategy: str = "hybrid"  # "hybrid" | "bm25_only" | "dense_only"
+
 @dataclass
 class ReasoningPlan:
     """Complete reasoning plan with multiple goals"""
@@ -75,21 +76,21 @@ class ReasoningPlan:
     goals: List[ReasoningGoal] = field(default_factory=list)
     current_step: int = 0
     total_confidence: float = 0.0
-    
+
     def add_goal(self, goal: ReasoningGoal):
         self.goals.append(goal)
-    
+
     def get_next_goal(self) -> Optional[ReasoningGoal]:
         """Get next pending or in_progress goal"""
         for goal in sorted(self.goals, key=lambda g: g.priority):
             if goal.status in ["pending", "in_progress"]:
                 return goal
         return None
-    
+
     def is_complete(self) -> bool:
         """Check if all goals are completed"""
         return all(g.status == "completed" for g in self.goals)
-    
+
     def get_completion_rate(self) -> float:
         """Get percentage of completed goals"""
         if not self.goals:
@@ -100,7 +101,7 @@ class ReasoningPlan:
 
 class AgenticPlanner:
     """Handles planning and replanning of reasoning steps"""
-    
+
     @staticmethod
     def create_initial_plan(query: str, llm_model, llm_tokenizer) -> ReasoningPlan:
         """Create initial reasoning plan by decomposing the query"""
@@ -112,127 +113,187 @@ RULES:
 - Each goal = one searchable question
 - Priority: 1=essential, 2=helpful, 3=supplementary
 - Order from foundational to dependent
+- Strategy: "hybrid" (default), "bm25_only" (keyword-heavy queries), "dense_only" (semantic queries)
 
 OUTPUT (JSON only):
 {
     "goals": [
-        {"description": "specific searchable question", "priority": 1},
-        {"description": "another question", "priority": 2}
+        {"description": "specific searchable question", "priority": 1, "strategy": "hybrid"},
+        {"description": "another question", "priority": 2, "strategy": "hybrid"}
     ]
 }"""
-        
+
         user_prompt = f"""Query: {query}
 
             Decompose this into 2-3 searchable sub-goals. Output JSON only."""
-        
+
         conversation = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         prompt = llm_tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True,
             tokenize=False
         )
-        
+
+        print(f"\n[PLANNER] Formatted prompt:\n{prompt}")
+
         response = generate(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
             max_tokens=500,
-            verbose=False
+            verbose=True
         )
-        
+
+        print(f"\n[PLANNER] Raw LLM response:\n{repr(response)}")
+
         # Parse the response
         plan = ReasoningPlan(main_query=query)
 
         plan_data = parse_json_safely(response)
+        print(f"[PLANNER] Parsed JSON: {plan_data}")
 
         if plan_data and "goals" in plan_data:
             for goal_data in plan_data.get("goals", []):
                 if isinstance(goal_data, dict) and "description" in goal_data:
                     goal = ReasoningGoal(
                         description=goal_data["description"],
-                        priority=goal_data.get("priority", 3)
+                        priority=goal_data.get("priority", 3),
+                        strategy=goal_data.get("strategy", "hybrid")
                     )
                     plan.add_goal(goal)
 
             if plan.goals:
-                print(f"\nCreated plan with {len(plan.goals)} goals:")
+                print(f"\n[PLANNER] Created plan with {len(plan.goals)} goals:")
                 for i, g in enumerate(plan.goals, 1):
-                    print(f"  {i}. [{g.priority}] {g.description}")
+                    print(f"  {i}. [P{g.priority}] ({g.strategy}) {g.description}")
             else:
-                print(f"Plan parsing failed: No valid goals found in response")
+                print(f"[PLANNER] Plan parsing failed: No valid goals found in response")
                 plan.add_goal(ReasoningGoal(description=query, priority=1))
         else:
-            print(f"Plan parsing failed: Could not parse JSON from LLM response")
+            print(f"[PLANNER] Plan parsing failed: Could not parse JSON from LLM response")
             # Fallback: treat entire query as single goal
             plan.add_goal(ReasoningGoal(description=query, priority=1))
 
         return plan
-    
+
     @staticmethod
     def replan(plan: ReasoningPlan, evaluation: Dict, llm_model, llm_tokenizer) -> ReasoningPlan:
+        """Replan based on evaluation results. Supports strategy switching, reformulation, and stopping."""
 
-        """Replan based on evaluation results"""
+        system_prompt = """You are a research coordinator. Decide next action.
 
-        system_prompt = """You are a research coordinator. Decide if more searches are needed.
+OPTIONS:
+1. ADD_GOALS: New sub-questions to fill gaps
+2. REFORMULATE: Rewrite a query (too vague or contradictory results)
+3. SWITCH_STRATEGY: Change from semantic to keyword search or vice versa
+4. STOP: Sufficient information gathered
 
 DECISION CRITERIA:
 - Are there unanswered aspects of the original query?
 - Did searches reveal new information needs?
 - Is confidence below 0.7 for key facts?
+- Were results sparse or contradictory? (consider SWITCH_STRATEGY)
+- Was the query too vague? (consider REFORMULATE)
 
 OUTPUT (JSON only):
 {
-    "needs_replanning": true/false,
-    "new_goals": [{"description": "new search need", "priority": 1}],
-    "reasoning": "one-sentence explanation"
+    "action": "ADD_GOALS",
+    "new_goals": [{"description": "...", "priority": 1, "strategy": "hybrid"}],
+    "reasoning": "one sentence"
 }"""
-        
+
         current_state = {
-            "completed_goals": [g.description for g in plan.goals if g.status == "completed"],
-            "pending_goals": [g.description for g in plan.goals if g.status != "completed"],
+            "original_query": plan.main_query,
+            "completed_goals": [
+                {"description": g.description, "confidence": g.confidence, "strategy": g.strategy}
+                for g in plan.goals if g.status == "completed"
+            ],
+            "pending_goals": [g.description for g in plan.goals if g.status == "pending"],
             "evaluation": evaluation
         }
-        
+
         user_prompt = f"""Current state: {json.dumps(current_state, indent=2)}
 
-            Should we add more search goals? Output JSON only."""
-        
+What should we do next? Output JSON only."""
+
         conversation = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         prompt = llm_tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True,
             tokenize=False
         )
-        
+
+        print(f"\n[REPLANNER] Formatted prompt:\n{prompt}")
+
         response = generate(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
             max_tokens=400,
-            verbose=False
+            verbose=True
         )
-        
-        replan_data = parse_json_safely(response)
 
-        if replan_data and replan_data.get("needs_replanning", False):
-            print(f"\nReplanning: {replan_data.get('reasoning', 'Adding new goals')}")
+        print(f"\n[REPLANNER] Raw LLM response:\n{repr(response)}")
+
+        replan_data = parse_json_safely(response)
+        print(f"[REPLANNER] Parsed JSON: {replan_data}")
+
+        if replan_data is None:
+            print(f"[REPLANNER] Replan parsing failed: Could not parse JSON from LLM response")
+            return plan
+
+        action = replan_data.get("action", "STOP")
+        reasoning = replan_data.get("reasoning", "")
+        print(f"\n[REPLANNER] Action: {action} — {reasoning}")
+
+        if action == "ADD_GOALS":
             for goal_data in replan_data.get("new_goals", []):
                 if isinstance(goal_data, dict) and "description" in goal_data:
                     new_goal = ReasoningGoal(
                         description=goal_data["description"],
-                        priority=goal_data.get("priority", 3)
+                        priority=goal_data.get("priority", 3),
+                        strategy=goal_data.get("strategy", "hybrid")
                     )
                     plan.add_goal(new_goal)
-                    print(f"  + Added: {new_goal.description}")
-        elif replan_data is None:
-            print(f"Replan parsing failed: Could not parse JSON from LLM response")
+                    print(f"  + Added goal: {new_goal.description} (strategy={new_goal.strategy})")
+
+        elif action == "REFORMULATE":
+            for goal_data in replan_data.get("new_goals", []):
+                if isinstance(goal_data, dict) and "description" in goal_data:
+                    new_goal = ReasoningGoal(
+                        description=goal_data["description"],
+                        priority=goal_data.get("priority", 1),
+                        strategy=goal_data.get("strategy", "hybrid")
+                    )
+                    plan.add_goal(new_goal)
+                    print(f"  + Reformulated goal: {new_goal.description}")
+
+        elif action == "SWITCH_STRATEGY":
+            # Switch remaining pending goals to bm25_only
+            for goal in plan.goals:
+                if goal.status == "pending":
+                    goal.strategy = "bm25_only"
+                    print(f"  ~ Switched strategy to bm25_only: {goal.description}")
+            # Also add any new goals from the replan
+            for goal_data in replan_data.get("new_goals", []):
+                if isinstance(goal_data, dict) and "description" in goal_data:
+                    new_goal = ReasoningGoal(
+                        description=goal_data["description"],
+                        priority=goal_data.get("priority", 2),
+                        strategy="bm25_only"
+                    )
+                    plan.add_goal(new_goal)
+                    print(f"  + Added bm25 goal: {new_goal.description}")
+
+        elif action == "STOP":
+            print("  Replanner decided to stop — sufficient information gathered.")
 
         return plan

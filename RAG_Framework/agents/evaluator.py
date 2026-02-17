@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 from mlx_lm import generate
 
 from RAG_Framework.agents.planner import ReasoningGoal, ReasoningPlan, parse_json_safely
@@ -6,7 +6,7 @@ from RAG_Framework.agents.planner import ReasoningGoal, ReasoningPlan, parse_jso
 
 class AgenticEvaluator:
     """Evaluates completeness and quality of retrieved information"""
-    
+
     @staticmethod
     def evaluate_goal_completion(
         goal: ReasoningGoal,
@@ -30,39 +30,44 @@ OUTPUT (JSON only):
     "missing_aspects": ["aspect1", "aspect2"],
     "reasoning": "brief assessment"
 }"""
-        
+
         user_prompt = f"""Goal: {goal.description}
 
 Retrieved context:
 {retrieved_context[:1000]}...
 
 Is this sufficient? Output JSON only."""
-        
+
         conversation = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         prompt = llm_tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True,
             tokenize=False
         )
-        
+
+        print(f"\n[EVALUATOR] Formatted prompt:\n{prompt}")
+
         response = generate(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
             max_tokens=300,
-            verbose=False
+            verbose=True
         )
-        
+
+        print(f"\n[EVALUATOR] Raw LLM response:\n{repr(response)}")
+
         eval_result = parse_json_safely(response)
+        print(f"[EVALUATOR] Parsed JSON: {eval_result}")
 
         if eval_result and "is_complete" in eval_result:
             return eval_result
         else:
-            print(f"Evaluation parsing failed: Could not parse JSON from LLM response")
+            print(f"[EVALUATOR] Evaluation parsing failed: Could not parse JSON from LLM response")
             # Fallback evaluation
             return {
                 "is_complete": len(retrieved_context) > 100 if retrieved_context else False,
@@ -70,7 +75,105 @@ Is this sufficient? Output JSON only."""
                 "missing_aspects": [],
                 "reasoning": "Fallback evaluation"
             }
-    
+
+    @staticmethod
+    def evaluate_goal_completion_with_gain(
+        goal: ReasoningGoal,
+        retrieved_context: str,
+        previous_contexts: List[str],
+        llm_model,
+        llm_tokenizer
+    ) -> Dict[str, Any]:
+        """Evaluate goal completion with information-gain and quality flags.
+
+        Adds novelty scoring and flags for sparse/contradictory results
+        compared to the basic evaluate_goal_completion().
+        """
+        system_prompt = """Evaluate retrieved information quality and novelty.
+
+SCORING (0.0-1.0):
+- Direct answer: +0.4, Complete coverage: +0.3, Specific facts: +0.2, Source quality: +0.1
+
+NOVELTY (information_gain 0.0-1.0):
+- 1.0 = entirely new facts not in previous findings
+- 0.0 = complete duplicate of what we already have
+
+FLAGS:
+- sparse_results: true if retrieval returned very little useful content
+- contradictory_info: true if new findings contradict previous ones
+
+OUTPUT (JSON only):
+{
+    "is_complete": true,
+    "confidence": 0.8,
+    "information_gain": 0.7,
+    "sparse_results": false,
+    "contradictory_info": false,
+    "missing_aspects": [],
+    "reasoning": "brief"
+}"""
+
+        # Build summary of previous findings (last 3, 500 chars each)
+        prev_summary = ""
+        if previous_contexts:
+            for i, ctx in enumerate(previous_contexts[-3:]):
+                prev_summary += f"\n--- Previous finding {i+1} ---\n{ctx[:500]}\n"
+
+        user_prompt = f"""Goal: {goal.description}
+
+Retrieved context:
+{retrieved_context[:1000]}
+
+Previous findings:{prev_summary if prev_summary else " (none)"}
+
+Evaluate quality and novelty. Output JSON only."""
+
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        prompt = llm_tokenizer.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+
+        print(f"\n[EVAL+GAIN] Formatted prompt:\n{prompt}")
+
+        response = generate(
+            llm_model,
+            llm_tokenizer,
+            prompt=prompt,
+            max_tokens=300,
+            verbose=True
+        )
+
+        print(f"\n[EVAL+GAIN] Raw LLM response:\n{repr(response)}")
+
+        eval_result = parse_json_safely(response)
+        print(f"[EVAL+GAIN] Parsed JSON: {eval_result}")
+
+        if eval_result and "is_complete" in eval_result:
+            # Ensure all expected fields have defaults
+            eval_result.setdefault("information_gain", 0.5)
+            eval_result.setdefault("sparse_results", False)
+            eval_result.setdefault("contradictory_info", False)
+            eval_result.setdefault("missing_aspects", [])
+            eval_result.setdefault("reasoning", "")
+            return eval_result
+        else:
+            print(f"[EVAL+GAIN] Parsing failed: Could not parse JSON from LLM response")
+            return {
+                "is_complete": len(retrieved_context) > 100 if retrieved_context else False,
+                "confidence": 0.5,
+                "information_gain": 0.5,
+                "sparse_results": len(retrieved_context) < 50 if retrieved_context else True,
+                "contradictory_info": False,
+                "missing_aspects": [],
+                "reasoning": "Fallback evaluation"
+            }
+
     @staticmethod
     def evaluate_overall_completeness(
         plan: ReasoningPlan,
@@ -110,7 +213,7 @@ OUTPUT (JSON only):
         combined_info = "\n".join(all_info)
         if len(combined_info) > 8000:
             combined_info = combined_info[:8000] + "..."
-        
+
         user_prompt = f"""Original query: {plan.main_query}
 
             Completed goals: {plan.get_completion_rate()*100:.0f}%
@@ -119,32 +222,37 @@ OUTPUT (JSON only):
             {combined_info}
 
             Can we answer comprehensively? Output JSON only."""
-        
+
         conversation = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         prompt = llm_tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True,
             tokenize=False
         )
-        
+
+        print(f"\n[OVERALL_EVAL] Formatted prompt:\n{prompt}")
+
         response = generate(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
             max_tokens=300,
-            verbose=False
+            verbose=True
         )
-        
+
+        print(f"\n[OVERALL_EVAL] Raw LLM response:\n{repr(response)}")
+
         eval_result = parse_json_safely(response)
+        print(f"[OVERALL_EVAL] Parsed JSON: {eval_result}")
 
         if eval_result and "can_answer" in eval_result:
             return eval_result
         else:
-            print(f"Overall evaluation parsing failed: Could not parse JSON from LLM response")
+            print(f"[OVERALL_EVAL] Parsing failed: Could not parse JSON from LLM response")
             return {
                 "can_answer": plan.get_completion_rate() > 0.6,
                 "overall_confidence": plan.get_completion_rate(),

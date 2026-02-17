@@ -67,7 +67,7 @@ MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
 
 # === Language Reasoning Model (LRM) Configuration ===
-REASONING_MODEL = True  # True = use LRM generator with [THINK] support, False = use standard generator
+REASONING_MODEL = True  # TODO: neste momento tens de usar isto sempre True pq o standard.py generator ta na merda no servidor. ele ta a ysar o LRM.py aqui. resolve.
 
 # === Google Custom Search Configuration ===
 GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"

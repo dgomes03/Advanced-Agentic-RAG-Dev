@@ -122,6 +122,9 @@ class RAGWebSocketClient {
         // Create assistant message placeholder
         UIComponents.createAssistantMessage(this.currentMessageId);
 
+        // Start rotating waiting messages
+        UIComponents.startWaitingMessages(this.currentMessageId);
+
         // Set processing state
         this.isProcessing = true;
         this.updateSendButton(false);
@@ -174,8 +177,10 @@ class RAGWebSocketClient {
                 const newText = currentText + data.text;
                 messageContent.setAttribute('data-raw-text', newText);
 
-                // Collapse thinking panel when first response text arrives
+                // When first response text arrives, remove waiting message and collapse thinking panel
                 if (!currentText.trim() && newText.trim()) {
+                    UIComponents.stopWaitingMessages(this.currentMessageId);
+
                     const panel = document.querySelector(`[data-thinking-for="${this.currentMessageId}"]`);
                     if (panel && !panel.classList.contains('collapsed')) {
                         panel.classList.add('collapsed');
@@ -283,6 +288,11 @@ class RAGWebSocketClient {
     onDone(data) {
         console.log('Query completed');
 
+        // Ensure waiting messages are removed
+        if (this.currentMessageId) {
+            UIComponents.stopWaitingMessages(this.currentMessageId);
+        }
+
         // Final render is already done in real-time, just do final cleanup
         if (this.currentMessageId) {
             const messageContent = document.querySelector(`[data-message-id="${this.currentMessageId}"]`);
@@ -332,6 +342,11 @@ class RAGWebSocketClient {
      */
     onError(data) {
         console.error('Error:', data);
+
+        // Ensure waiting messages are removed
+        if (this.currentMessageId) {
+            UIComponents.stopWaitingMessages(this.currentMessageId);
+        }
 
         // Display error message
         if (this.currentMessageId) {

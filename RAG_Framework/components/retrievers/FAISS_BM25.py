@@ -414,13 +414,19 @@ class Retriever:
         context_string = "\n---\n".join(chunks_list)
         return context_string, chunks_list
 
-    def search_documents_tool(self, query: str) -> str:
-        """Tool for semantic search across all documents"""
+    def search_documents_tool(self, query: str, weight_dense: float = 0.6, weight_sparse: float = 0.4) -> str:
+        """Tool for semantic search across all documents.
+
+        Args:
+            query: Search query string.
+            weight_dense: Weight for dense (FAISS) retrieval (default 0.6).
+            weight_sparse: Weight for sparse (BM25) retrieval (default 0.4).
+        """
         try:
             return self.combined_retrieval(
                 query=query,
-                weight_dense=0.6,
-                weight_sparse=0.4,
+                weight_dense=weight_dense,
+                weight_sparse=weight_sparse,
                 use_summarization=False
             )
         except Exception as e:
