@@ -49,6 +49,9 @@ class UIComponents {
      * Create a tool call card
      */
     static createToolCallCard(messageId, toolData) {
+        // Advanced reasoning is represented by the reasoning panel itself — skip the tool card
+        if (toolData.tool_name === 'activate_advanced_reasoning') return;
+
         // Find the assistant message for this messageId
         const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageContent) {
@@ -142,19 +145,16 @@ class UIComponents {
     }
 
     /**
-     * Update reasoning step
+     * Get or create the reasoning panel for a message
      */
-    static updateReasoningStep(messageId, data) {
+    static _getOrCreateReasoningPanel(messageId) {
         const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
-        if (!messageContent) return;
+        if (!messageContent) return null;
 
         const message = messageContent.closest('.message');
         const reasoningContainer = message.querySelector('.reasoning-container');
-
-        // Show reasoning container
         reasoningContainer.style.display = 'block';
 
-        // Check if reasoning panel exists
         let panel = reasoningContainer.querySelector('.reasoning-panel');
         if (!panel) {
             const template = document.getElementById('reasoning-panel-template');
@@ -162,31 +162,119 @@ class UIComponents {
             reasoningContainer.appendChild(clone);
             panel = reasoningContainer.querySelector('.reasoning-panel');
 
-            // Set up toggle
             const toggle = panel.querySelector('.reasoning-toggle');
-            const content = panel.querySelector('.reasoning-content');
             toggle.addEventListener('click', () => {
                 panel.classList.toggle('collapsed');
             });
         }
+        return panel;
+    }
 
-        // Update phase
-        const phase = panel.querySelector('.reasoning-phase');
-        if (data.type === 'planning') {
-            phase.textContent = 'Planning - Breaking down the query...';
-        } else if (data.type === 'searching') {
-            phase.textContent = `Step ${data.step}/${data.max_steps} - Searching for information...`;
-        } else if (data.type === 'evaluating') {
-            phase.textContent = 'Evaluating - Assessing completeness...';
+    /**
+     * Create a goal element and append it to the goals container
+     */
+    static _createGoalElement(container, goalData, index) {
+        const template = document.getElementById('reasoning-goal-template');
+        const clone = template.content.cloneNode(true);
+        const goalEl = clone.querySelector('.goal');
+
+        goalEl.setAttribute('data-goal-index', index);
+        goalEl.querySelector('.goal-text').textContent = goalData.description;
+        goalEl.querySelector('.goal-priority-tag').textContent = `P${goalData.priority || 2}`;
+        goalEl.querySelector('.goal-strategy-tag').textContent = goalData.strategy || 'hybrid';
+
+        container.appendChild(clone);
+    }
+
+    /**
+     * Build a single source card element from a source descriptor.
+     * source = { tool_name, label, chars (number) | chars_text (string), result | preview }
+     */
+    static _createSourceItem(source) {
+        const item = document.createElement('div');
+        item.className = 'goal-source-item';
+        item.setAttribute('data-tool-name', source.tool_name || '');
+
+        const toolLabel = this.formatToolName(source.tool_name || 'search');
+        const label = source.label || '';
+        const charsText = source.chars_text
+            || (source.chars !== undefined ? `· ${Number(source.chars).toLocaleString()} chars` : '');
+        const content = source.result || source.preview || '';
+        const isUrl = label.startsWith('http://') || label.startsWith('https://');
+
+        const icon = this.getToolIcon(source.tool_name || '').replace(
+            /width="\d+" height="\d+"/, 'width="13" height="13"'
+        );
+
+        const labelHtml = label
+            ? (isUrl
+                ? `<a class="goal-source-label" href="${this.escapeHtml(label)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(label)}</a>`
+                : `<span class="goal-source-label">${this.escapeHtml(label)}</span>`)
+            : '';
+
+        item.innerHTML = `
+            <div class="goal-source-header">
+                <span class="goal-source-icon">${icon}</span>
+                <span class="goal-source-tool-name">${this.escapeHtml(toolLabel)}</span>
+                ${label ? '<span class="goal-source-sep">·</span>' : ''}
+                ${labelHtml}
+                ${charsText ? `<span class="goal-source-chars">${this.escapeHtml(charsText)}</span>` : ''}
+                <svg class="goal-source-toggle" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 4.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="goal-source-preview"></div>
+        `;
+
+        item.querySelector('.goal-source-preview').textContent = content;
+
+        item.querySelector('.goal-source-header').addEventListener('click', (e) => {
+            if (e.target.closest('a')) return; // don't toggle when clicking links
+            item.classList.toggle('open');
+        });
+
+        return item;
+    }
+
+    /**
+     * Update reasoning step — called when planning completes (step=0) or a new goal starts (step>0)
+     */
+    static updateReasoningStep(messageId, data) {
+        const panel = this._getOrCreateReasoningPanel(messageId);
+        if (!panel) return;
+
+        // Update step counter badge
+        const counter = panel.querySelector('.reasoning-step-counter');
+        if (counter) {
+            if (data.step === 0) {
+                counter.textContent = 'Planning…';
+            } else {
+                counter.textContent = `Step ${data.step} / ${data.total_steps}`;
+            }
+        }
+
+        const goalsContainer = panel.querySelector('.reasoning-goals');
+
+        // Step 0: planning done — render all goals
+        if (data.step === 0 && data.goals) {
+            goalsContainer.innerHTML = '';
+            data.goals.forEach((goal, i) => this._createGoalElement(goalsContainer, goal, i));
+        } else if (data.step > 0 && data.goal_index !== undefined) {
+            // Mark current goal as in-progress
+            const goalEl = goalsContainer.querySelector(`[data-goal-index="${data.goal_index}"]`);
+            if (goalEl) {
+                goalEl.className = 'goal in-progress';
+            }
         }
 
         this.scrollToBottom();
     }
 
     /**
-     * Update reasoning goal
+     * Show source cards for a goal after retrieval completes.
+     * Uses data.sources (array) when available; falls back to legacy single-tool fields.
      */
-    static updateReasoningGoal(messageId, data) {
+    static updateReasoningRetrieval(messageId, data) {
         const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!messageContent) return;
 
@@ -194,63 +282,32 @@ class UIComponents {
         const panel = message.querySelector('.reasoning-panel');
         if (!panel) return;
 
-        const goalsContainer = panel.querySelector('.reasoning-goals');
-        const goalId = `goal-${data.goal_id || Math.random().toString(36).substr(2, 9)}`;
+        const goalIndex = data.goal_index !== undefined ? data.goal_index : 0;
+        const goalEl = panel.querySelector(`[data-goal-index="${goalIndex}"]`);
+        if (!goalEl) return;
 
-        // Check if goal exists
-        let goalElement = goalsContainer.querySelector(`[data-goal-id="${goalId}"]`);
-        if (!goalElement) {
-            // Create new goal
-            const template = document.getElementById('reasoning-goal-template');
-            const clone = template.content.cloneNode(true);
-            goalElement = clone.querySelector('.reasoning-goal');
-            goalElement.setAttribute('data-goal-id', goalId);
-            goalsContainer.appendChild(clone);
-            goalElement = goalsContainer.querySelector(`[data-goal-id="${goalId}"]`);
-        }
+        const sourcesContainer = goalEl.querySelector('.goal-sources');
+        if (!sourcesContainer) return;
 
-        // Update goal status class
-        goalElement.className = 'reasoning-goal ' + (data.status || 'pending');
+        // Build sources list — prefer new `sources` field, fall back to legacy
+        const sources = (data.sources && data.sources.length > 0)
+            ? data.sources
+            : [{
+                tool_name: data.tool_name || 'search',
+                label: '',
+                chars: data.chars_retrieved || 0,
+                result: data.preview || ''
+            }];
 
-        // Update goal text
-        const goalText = goalElement.querySelector('.goal-text');
-        goalText.textContent = data.goal || data.description;
-
-        // Update status icon
-        const statusIcon = goalElement.querySelector('.goal-status-icon');
-        if (data.status === 'completed') {
-            statusIcon.textContent = '✓';
-        } else if (data.status === 'in-progress') {
-            statusIcon.textContent = '⋯';
-        } else {
-            statusIcon.textContent = '○';
-        }
-
-        // Update confidence
-        if (data.confidence !== undefined) {
-            const confidence = data.confidence * 100;
-            const confidenceBar = goalElement.querySelector('.confidence-fill');
-            confidenceBar.style.width = confidence + '%';
-
-            const confidenceValue = goalElement.querySelector('.confidence-value');
-            confidenceValue.textContent = Math.round(confidence) + '%';
-        }
-
-        // Update status badge
-        const statusBadge = goalElement.querySelector('.goal-status-badge');
-        if (data.status === 'completed') {
-            statusBadge.textContent = 'Completed';
-        } else if (data.status === 'in-progress') {
-            statusBadge.textContent = 'In Progress';
-        } else {
-            statusBadge.textContent = 'Pending';
-        }
+        sources.forEach(source => {
+            sourcesContainer.appendChild(this._createSourceItem(source));
+        });
 
         this.scrollToBottom();
     }
 
     /**
-     * Update reasoning evaluation
+     * Show evaluation scores for a goal
      */
     static updateReasoningEvaluation(messageId, data) {
         const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
@@ -260,19 +317,74 @@ class UIComponents {
         const panel = message.querySelector('.reasoning-panel');
         if (!panel) return;
 
-        const progressContainer = panel.querySelector('.reasoning-progress');
+        const goalIndex = data.goal_index !== undefined ? data.goal_index : 0;
+        const goalEl = panel.querySelector(`[data-goal-index="${goalIndex}"]`);
+        if (!goalEl) return;
 
-        let html = '<strong>Evaluation:</strong><br>';
-        html += `Can answer: ${data.can_answer ? '✓ Yes' : '✗ Not yet'}<br>`;
-        if (data.overall_confidence !== undefined) {
-            const confidence = Math.round(data.overall_confidence * 100);
-            html += `Overall confidence: ${confidence}%<br>`;
-        }
-        if (data.missing_aspects && data.missing_aspects.length > 0) {
-            html += `Missing: ${data.missing_aspects.join(', ')}`;
+        // Mark goal completed
+        goalEl.className = 'goal completed';
+
+        // Show scores section
+        const scoresEl = goalEl.querySelector('.goal-scores');
+        if (scoresEl) {
+            scoresEl.style.display = 'block';
+
+            const confidence = Math.round((data.confidence || 0) * 100);
+            goalEl.querySelector('.confidence-fill').style.width = confidence + '%';
+            goalEl.querySelector('.confidence-value').textContent = confidence + '%';
+
+            const infoGain = Math.round((data.information_gain || 0) * 100);
+            goalEl.querySelector('.info-gain-fill').style.width = infoGain + '%';
+            goalEl.querySelector('.info-gain-value').textContent = infoGain + '%';
+
+            // Quality flags
+            const flagsEl = scoresEl.querySelector('.goal-flags');
+            if (flagsEl) {
+                flagsEl.innerHTML = '';
+                const isSparse = data.sparse_results || (data.confidence < 0.7);
+                if (isSparse) {
+                    flagsEl.innerHTML += '<span class="goal-flag sparse">⚠ Sparse</span>';
+                }
+                if (data.contradictory_info) {
+                    flagsEl.innerHTML += '<span class="goal-flag contradictory">⚡ Contradictory</span>';
+                }
+                if (!isSparse && !data.contradictory_info) {
+                    flagsEl.innerHTML += '<span class="goal-flag ok">✓ Good quality</span>';
+                }
+            }
+
+            // Evaluation reasoning
+            if (data.reasoning) {
+                const reasoningEl = scoresEl.querySelector('.goal-reasoning');
+                if (reasoningEl) reasoningEl.textContent = `"${data.reasoning}"`;
+            }
         }
 
-        progressContainer.innerHTML = html;
+        this.scrollToBottom();
+    }
+
+    /**
+     * Add replanned goals to the panel
+     */
+    static updateReasoningReplan(messageId, data) {
+        const messageContent = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageContent) return;
+
+        const message = messageContent.closest('.message');
+        const panel = message.querySelector('.reasoning-panel');
+        if (!panel) return;
+
+        const goalsContainer = panel.querySelector('.reasoning-goals');
+        if (!goalsContainer || !data.new_goals || !data.new_goals.length) return;
+
+        const existingCount = goalsContainer.querySelectorAll('.goal').length;
+        data.new_goals.forEach((goalDesc, i) => {
+            const goalData = typeof goalDesc === 'string'
+                ? { description: goalDesc, priority: 2, strategy: 'hybrid' }
+                : goalDesc;
+            this._createGoalElement(goalsContainer, goalData, existingCount + i);
+        });
+
         this.scrollToBottom();
     }
 
@@ -412,15 +524,81 @@ class UIComponents {
     }
 
     /**
-     * Smooth scroll to bottom of messages
+     * Restore a saved reasoning panel when loading a past conversation
+     */
+    static restoreReasoningPanel(messageId, reasoningData) {
+        const panel = this._getOrCreateReasoningPanel(messageId);
+        if (!panel) return;
+
+        const counter = panel.querySelector('.reasoning-step-counter');
+        if (counter && reasoningData.step_counter) {
+            counter.textContent = reasoningData.step_counter;
+        }
+
+        // Collapse by default when loading from history
+        panel.classList.add('collapsed');
+
+        const goalsContainer = panel.querySelector('.reasoning-goals');
+        goalsContainer.innerHTML = '';
+
+        (reasoningData.goals || []).forEach(g => {
+            const template = document.getElementById('reasoning-goal-template');
+            const clone = template.content.cloneNode(true);
+            const goalEl = clone.querySelector('.goal');
+
+            goalEl.setAttribute('data-goal-index', g.index);
+            goalEl.className = g.status ? `goal ${g.status}` : 'goal';
+            goalEl.querySelector('.goal-text').textContent = g.description;
+            goalEl.querySelector('.goal-priority-tag').textContent = g.priority_tag;
+            goalEl.querySelector('.goal-strategy-tag').textContent = g.strategy_tag;
+
+            // Restore source cards — migrate old single-tool format if needed
+            const sourcesContainer = goalEl.querySelector('.goal-sources');
+            if (sourcesContainer) {
+                const sources = g.sources
+                    || (g.tool_name ? [{
+                        tool_name: g.tool_name,
+                        label: '',
+                        chars_text: g.chars_retrieved || '',
+                        preview: g.preview || ''
+                    }] : []);
+                sources.forEach(s => sourcesContainer.appendChild(this._createSourceItem(s)));
+            }
+
+            if (g.scores) {
+                const scoresEl = goalEl.querySelector('.goal-scores');
+                scoresEl.style.display = 'block';
+                goalEl.querySelector('.confidence-fill').style.width = g.scores.confidence_width;
+                goalEl.querySelector('.confidence-value').textContent = g.scores.confidence_text;
+                goalEl.querySelector('.info-gain-fill').style.width = g.scores.info_gain_width;
+                goalEl.querySelector('.info-gain-value').textContent = g.scores.info_gain_text;
+                if (g.scores.flags_html) {
+                    goalEl.querySelector('.goal-flags').innerHTML = g.scores.flags_html;
+                }
+                if (g.scores.reasoning) {
+                    goalEl.querySelector('.goal-reasoning').textContent = g.scores.reasoning;
+                }
+            }
+
+            goalsContainer.appendChild(clone);
+        });
+    }
+
+    /**
+     * Smooth scroll to bottom of messages — only if user is already near the bottom.
+     * This prevents hijacking the scroll position when the user has scrolled up to read.
      */
     static scrollToBottom() {
         const messagesContainer = document.querySelector('.main-content');
         if (messagesContainer) {
-            messagesContainer.scrollTo({
-                top: messagesContainer.scrollHeight,
-                behavior: 'smooth'
-            });
+            const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
+            const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+            if (distanceFromBottom < 150) {
+                messagesContainer.scrollTo({
+                    top: messagesContainer.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }
         }
     }
 
@@ -445,7 +623,10 @@ class UIComponents {
         'A pensar muito...', 'Consultando o universo...', 'A atingir o pico...',
         'A queimar neurónios...', 'A sentir a frequência...', 'Momento de génio...',
         'A meditar profundamente...', 'A conjurar ideias...', 'A sondar o terreno...', 'A improvisar...',
-        'A desvendar mistérios...', 'A entrar na simulação...'
+        'A desvendar mistérios...', 'A entrar na simulação...', "Skibidi... skibidi toilet...",
+        "I'm still working, dont worry...", "I'm not frozen, dont worry...", "Aguente mais um pouco...",
+        "Estou a ler imensa coisa, tenha paciência...", "I'm calculating Attention(Q,K,V)=softmax(QK⊤√dk)V...",
+        "Reading..."
     ];
     static _waitingIntervals = {};
 

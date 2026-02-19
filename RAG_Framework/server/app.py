@@ -390,20 +390,8 @@ def create_app(retriever, host='0.0.0.0', port=5050):
             conversation_manager = rag_system.conversation_manager if hasattr(rag_system, 'conversation_manager') else None
             prompt_cache = rag_system.prompt_cache if hasattr(rag_system, 'prompt_cache') else None
 
-            if ADVANCED_REASONING:
-                from RAG_Framework.components.generators.reasoning import AgenticGenerator
-                response = AgenticGenerator.agentic_answer_query(
-                    query=query,
-                    llm_model=rag_system.llm_model,
-                    llm_tokenizer=rag_system.llm_tokenizer,
-                    retriever=rag_system,
-                    prompt_cache=prompt_cache,
-                    conversation_manager=conversation_manager,
-                    stream_callback=stream_callback
-                )
-            elif REASONING_MODEL:
-                from RAG_Framework.components.generators.LRM import LRMGenerator
-                response = LRMGenerator.answer_query_with_llm(
+            if ADVANCED_REASONING or not REASONING_MODEL:
+                response = Generator.answer_query_with_llm(
                     query=query,
                     llm_model=rag_system.llm_model,
                     llm_tokenizer=rag_system.llm_tokenizer,
@@ -413,8 +401,9 @@ def create_app(retriever, host='0.0.0.0', port=5050):
                     verbose=False,
                     conversation_manager=conversation_manager
                 )
-            else:
-                response = Generator.answer_query_with_llm(
+            elif REASONING_MODEL:
+                from RAG_Framework.components.generators.LRM import LRMGenerator
+                response = LRMGenerator.answer_query_with_llm(
                     query=query,
                     llm_model=rag_system.llm_model,
                     llm_tokenizer=rag_system.llm_tokenizer,

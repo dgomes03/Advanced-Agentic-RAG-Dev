@@ -22,6 +22,7 @@ class ConversationManager:
         "MULTILINGUAL RULE:\n"
         "Questions in ANY language (Portuguese, Spanish, etc.) about facts → use search tools.\n"
         "Perguntas factuais em qualquer idioma → use ferramentas de pesquisa.\n\n"
+        "Ao responder a questões de direito, gestão, contabilidade e finanças em Portugues, pesquisa sempre por fontes de Portugal, nunca Brasil."
         
         "TECHNICAL CONTENT RULE:\n"
         "Mathematical formulas, code, algorithms MUST appear in retrieved sources.\n"

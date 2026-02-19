@@ -652,8 +652,8 @@
             padding: var(--spacing-sm) var(--spacing-md);
             background:#fff7e1;
             border-radius: 20px;
-            box-shadow: #1d1d1f33 0px 1px 3px, #1d1d1f1a 0px 1px 2px;
-            max-width: 80%;
+            box-shadow: #1d1d1f1f 0px 1px 3px, #1d1d1f1a 0px 1px 2px;
+            max-width: 100%;
         }
 
         /* Assistant messages - align to the left */
@@ -835,11 +835,11 @@
 
         .tool-card {
             display: block;
-            background: rgba(245, 245, 247, 0.3);
-            border-radius: var(--radius-md);
+            background: rgba(246, 234, 220, 0.3);
+            border-radius: 22px;
             padding: var(--spacing-md);
-            border: 1px solid rgba(210, 210, 215, 0.4);
-            border-left: 2px solid var(--color-border);
+            border: 1px solid rgba(218, 203, 180, 0.4);
+            border-left: 2px solid rgba(222, 172, 97, 0.4);
             margin-bottom: var(--spacing-md);
             transition: all 0.2s ease;
         }
@@ -1027,6 +1027,16 @@
             color: var(--color-text-secondary);
         }
 
+        .reasoning-step-counter {
+            font-size: 12px;
+            color: var(--color-text-secondary);
+            font-weight: 400;
+            background: var(--color-bg);
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+            border: 1px solid var(--color-border);
+        }
+
         .reasoning-toggle {
             background: none;
             border: none;
@@ -1044,22 +1054,17 @@
             display: none;
         }
 
-        .reasoning-phase {
-            font-size: 13px;
-            color: var(--color-text-secondary);
-            margin-bottom: var(--spacing-md);
-        }
-
         .reasoning-goals {
             display: flex;
             flex-direction: column;
             gap: var(--spacing-sm);
         }
 
+        /* ── Goal card ── */
         .goal {
             background: var(--color-bg);
             border-radius: var(--radius-sm);
-            padding: var(--spacing-sm);
+            padding: var(--spacing-sm) var(--spacing-md);
             border-left: 2px solid var(--color-border);
             transition: border-color 0.2s ease;
         }
@@ -1074,16 +1079,18 @@
 
         .goal-header {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: var(--spacing-sm);
-            margin-bottom: var(--spacing-xs);
         }
 
         .goal-indicator {
-            width: 6px;
-            height: 6px;
+            width: 7px;
+            height: 7px;
             border-radius: var(--radius-full);
             background: var(--color-text-secondary);
+            flex-shrink: 0;
+            margin-top: 4px;
+            transition: background 0.3s ease;
         }
 
         .goal.completed .goal-indicator {
@@ -1092,50 +1099,241 @@
 
         .goal.in-progress .goal-indicator {
             background: var(--color-warning);
+            animation: pulse-indicator 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-indicator {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.35; }
+        }
+
+        .goal-header-content {
+            flex: 1;
+            min-width: 0;
         }
 
         .goal-text {
-            flex: 1;
             font-size: 13px;
             color: var(--color-text);
+            line-height: 1.4;
         }
 
-        .goal-meta {
+        .goal-tags {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 11px;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .goal-priority-tag,
+        .goal-strategy-tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 600;
+            background: var(--color-surface);
             color: var(--color-text-secondary);
-            margin-top: var(--spacing-xs);
+            border: 1px solid var(--color-border);
         }
 
-        .goal-confidence {
+        /* Source cards (shown after retrieval) */
+        .goal-sources {
             display: flex;
-            align-items: center;
-            gap: var(--spacing-sm);
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 6px;
+            padding-left: 15px;
         }
 
-        .confidence-bar {
-            width: 60px;
-            height: 3px;
-            background: var(--color-border);
-            border-radius: var(--radius-full);
+        .goal-source-item {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 6px;
             overflow: hidden;
         }
 
-        .confidence-fill {
-            height: 100%;
-            background: var(--color-success);
-            transition: width 0.3s ease;
+        .goal-source-header {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 8px;
+            font-size: 11px;
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            user-select: none;
         }
 
-        .reasoning-progress {
+        .goal-source-header:hover {
             background: var(--color-bg);
-            padding: var(--spacing-sm);
-            border-radius: var(--radius-sm);
-            font-size: 12px;
+        }
+
+        .goal-source-icon {
+            color: var(--color-accent);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .goal-source-tool-name {
+            font-weight: 600;
+            color: var(--color-accent);
+            flex-shrink: 0;
+        }
+
+        .goal-source-sep {
+            color: var(--color-border);
+            flex-shrink: 0;
+        }
+
+        .goal-source-label {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--color-text);
+        }
+
+        a.goal-source-label {
+            color: var(--color-accent);
+            text-decoration: none;
+        }
+
+        a.goal-source-label:hover {
+            text-decoration: underline;
+        }
+
+        .goal-source-chars {
+            flex-shrink: 0;
             color: var(--color-text-secondary);
-            margin-top: var(--spacing-sm);
+            font-size: 10px;
+        }
+
+        .goal-source-toggle {
+            flex-shrink: 0;
+            color: var(--color-text-secondary);
+            transition: transform 0.2s ease;
+            margin-left: 2px;
+        }
+
+        .goal-source-item.open .goal-source-toggle {
+            transform: rotate(180deg);
+        }
+
+        .goal-source-preview {
+            display: none;
+            padding: 8px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            color: var(--color-text-secondary);
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.4;
+            border-top: 1px solid var(--color-border);
+            background: var(--color-bg);
+        }
+
+        .goal-source-item.open .goal-source-preview {
+            display: block;
+        }
+
+        /* Evaluation scores (shown after evaluation) */
+        .goal-scores {
+            display: none;
+            margin-top: 8px;
+            padding-left: 15px;
+        }
+
+        .score-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 3px;
+            font-size: 11px;
+        }
+
+        .score-label {
+            width: 68px;
+            color: var(--color-text-secondary);
+            flex-shrink: 0;
+        }
+
+        .score-bar {
+            flex: 1;
+            height: 4px;
+            background: var(--color-border);
+            border-radius: 2px;
+            overflow: hidden;
+            max-width: 90px;
+        }
+
+        .score-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.4s ease;
+            width: 0%;
+        }
+
+        .confidence-fill {
+            background: var(--color-success);
+        }
+
+        .info-gain-fill {
+            background: var(--color-accent);
+        }
+
+        .score-value {
+            width: 30px;
+            text-align: right;
+            color: var(--color-text-secondary);
+            font-weight: 500;
+            font-size: 11px;
+        }
+
+        /* Quality flags */
+        .goal-flags {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+            flex-wrap: wrap;
+        }
+
+        .goal-flag {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+
+        .goal-flag.sparse {
+            background: rgba(255, 149, 0, 0.1);
+            color: var(--color-warning);
+            border: 1px solid rgba(255, 149, 0, 0.2);
+        }
+
+        .goal-flag.contradictory {
+            background: rgba(255, 59, 48, 0.1);
+            color: var(--color-error);
+            border: 1px solid rgba(255, 59, 48, 0.2);
+        }
+
+        .goal-flag.ok {
+            background: rgba(52, 199, 89, 0.1);
+            color: var(--color-success);
+            border: 1px solid rgba(52, 199, 89, 0.2);
+        }
+
+        .goal-reasoning {
+            font-size: 11px;
+            color: var(--color-text-secondary);
+            font-style: italic;
+            margin-top: 4px;
+            line-height: 1.4;
         }
 
         /* ===== Input Area ===== */
@@ -1513,6 +1711,21 @@
             color: #8899bb;
         }
 
+        [data-theme="dark"] .goal {
+            background: rgba(35, 35, 35, 0.8);
+        }
+
+        [data-theme="dark"] .goal-priority-tag,
+        [data-theme="dark"] .goal-strategy-tag {
+            background: rgba(50, 50, 50, 0.8);
+            border-color: rgba(70, 70, 70, 0.6);
+        }
+
+        [data-theme="dark"] .goal-preview-content {
+            background: rgba(40, 40, 40, 0.9);
+            border-color: rgba(70, 70, 70, 0.4);
+        }
+
         [data-theme="dark"] .tool-card {
             background: rgba(40, 40, 40, 0.3);
             border-color: rgba(60, 60, 60, 0.4);
@@ -1590,7 +1803,6 @@
                                 <path d="M3 5h14M3 10h14M3 15h14"/>
                             </svg>
                         </button>
-                        <div class="header-title">Advanced Agentic RAG</div>
                     </div>
                     <div class="header-actions">
                         <div class="status-indicator" id="status-indicator">
@@ -1745,10 +1957,11 @@
             <div class="reasoning-header">
                 <div class="reasoning-info">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
-                        <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M8 2C5.8 2 4 3.8 4 6c0 1.4.7 2.6 1.8 3.3.3.2.5.5.5.9v.8h3.4v-.8c0-.4.2-.7.5-.9C11.3 8.6 12 7.4 12 6c0-2.2-1.8-4-4-4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M6.5 13h3M6.8 11h2.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                     </svg>
-                    <span>Reasoning</span>
+                    <span>Advanced Search</span>
+                    <span class="reasoning-step-counter"></span>
                 </div>
                 <button class="reasoning-toggle" aria-label="Toggle">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -1757,28 +1970,37 @@
                 </button>
             </div>
             <div class="reasoning-content">
-                <div class="reasoning-phase"></div>
                 <div class="reasoning-goals"></div>
-                <div class="reasoning-progress"></div>
             </div>
         </div>
     </template>
 
     <template id="reasoning-goal-template">
-        <div class="goal" data-goal-id="">
+        <div class="goal" data-goal-index="">
             <div class="goal-header">
                 <span class="goal-indicator"></span>
-                <span class="goal-text"></span>
-            </div>
-            <div class="goal-meta">
-                <div class="goal-confidence">
-                    <span>Confidence</span>
-                    <div class="confidence-bar">
-                        <div class="confidence-fill"></div>
+                <div class="goal-header-content">
+                    <span class="goal-text"></span>
+                    <div class="goal-tags">
+                        <span class="goal-priority-tag"></span>
+                        <span class="goal-strategy-tag"></span>
                     </div>
-                    <span class="confidence-value"></span>
                 </div>
-                <span class="goal-badge"></span>
+            </div>
+            <div class="goal-sources"></div>
+            <div class="goal-scores">
+                <div class="score-row">
+                    <span class="score-label">Confidence</span>
+                    <div class="score-bar"><div class="score-fill confidence-fill"></div></div>
+                    <span class="confidence-value score-value"></span>
+                </div>
+                <div class="score-row">
+                    <span class="score-label">Info Gain</span>
+                    <div class="score-bar"><div class="score-fill info-gain-fill"></div></div>
+                    <span class="info-gain-value score-value"></span>
+                </div>
+                <div class="goal-flags"></div>
+                <div class="goal-reasoning"></div>
             </div>
         </div>
     </template>

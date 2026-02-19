@@ -62,12 +62,12 @@ SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5050
 
 # === Reasoning Configuration ===
-ADVANCED_REASONING = False
+ADVANCED_REASONING = True # isto so ativa a tool q permite o LLM aceder a esta pipeline, by default usa a pipeline normal.
 MAX_REASONING_STEPS = 5
 MIN_CONFIDENCE_THRESHOLD = 0.7
 
 # === Language Reasoning Model (LRM) Configuration ===
-REASONING_MODEL = True  # TODO: neste momento tens de usar isto sempre True pq o standard.py generator ta na merda no servidor. ele ta a ysar o LRM.py aqui. resolve.
+REASONING_MODEL = False  
 
 # === Google Custom Search Configuration ===
 GOOGLE_API_KEY = "AIzaSyAXXtU2WSpdM-sUR2z7c19CcDBqXQ1zhug"

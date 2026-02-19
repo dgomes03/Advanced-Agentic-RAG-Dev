@@ -1,7 +1,6 @@
 from typing import Dict, Any, List
-from mlx_lm import generate
 
-from RAG_Framework.agents.planner import ReasoningGoal, ReasoningPlan, parse_json_safely
+from RAG_Framework.agents.planner import ReasoningGoal, ReasoningPlan, parse_json_safely, generate_fixed
 
 
 class AgenticEvaluator:
@@ -51,11 +50,11 @@ Is this sufficient? Output JSON only."""
 
         print(f"\n[EVALUATOR] Formatted prompt:\n{prompt}")
 
-        response = generate(
+        response = generate_fixed(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
-            max_tokens=300,
+            max_tokens=600,
             verbose=True
         )
 
@@ -141,11 +140,11 @@ Evaluate quality and novelty. Output JSON only."""
 
         print(f"\n[EVAL+GAIN] Formatted prompt:\n{prompt}")
 
-        response = generate(
+        response = generate_fixed(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
-            max_tokens=300,
+            max_tokens=600,
             verbose=True
         )
 
@@ -236,11 +235,11 @@ OUTPUT (JSON only):
 
         print(f"\n[OVERALL_EVAL] Formatted prompt:\n{prompt}")
 
-        response = generate(
+        response = generate_fixed(
             llm_model,
             llm_tokenizer,
             prompt=prompt,
-            max_tokens=300,
+            max_tokens=600,
             verbose=True
         )
 

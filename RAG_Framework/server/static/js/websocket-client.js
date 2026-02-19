@@ -54,7 +54,9 @@ class RAGWebSocketClient {
         // Reasoning events
         this.socket.on('reasoning_step', (data) => this.onReasoningStep(data));
         this.socket.on('reasoning_goal', (data) => this.onReasoningGoal(data));
+        this.socket.on('reasoning_retrieval', (data) => this.onReasoningRetrieval(data));
         this.socket.on('reasoning_evaluation', (data) => this.onReasoningEvaluation(data));
+        this.socket.on('reasoning_replan', (data) => this.onReasoningReplan(data));
 
         // Status events
         this.socket.on('status', (data) => this.onStatus(data));
@@ -252,19 +254,34 @@ class RAGWebSocketClient {
     }
 
     /**
-     * Handle reasoning goal update
+     * Handle reasoning goal update (legacy — event not emitted by current server)
      */
     onReasoningGoal(data) {
         console.log('Reasoning goal:', data);
-        UIComponents.updateReasoningGoal(this.currentMessageId, data);
     }
 
     /**
-     * Handle reasoning evaluation
+     * Handle retrieval result for a goal
+     */
+    onReasoningRetrieval(data) {
+        console.log('Reasoning retrieval:', data);
+        UIComponents.updateReasoningRetrieval(this.currentMessageId, data);
+    }
+
+    /**
+     * Handle reasoning evaluation (per-goal scores)
      */
     onReasoningEvaluation(data) {
         console.log('Reasoning evaluation:', data);
         UIComponents.updateReasoningEvaluation(this.currentMessageId, data);
+    }
+
+    /**
+     * Handle replanning — add new goals to the panel
+     */
+    onReasoningReplan(data) {
+        console.log('Reasoning replan:', data);
+        UIComponents.updateReasoningReplan(this.currentMessageId, data);
     }
 
     /**

@@ -1,9 +1,7 @@
 import json
 import random
 import string
-import sys
-import io
-from mlx_lm import generate
+from mlx_lm import generate, stream_generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 
 from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, GOOGLE_CX, GOOGLE_API_KEY
@@ -122,6 +120,21 @@ class Generator:
         return ''.join(parts)
 
     @staticmethod
+    def _safe_json_loads(s):
+        """Parse JSON, retrying with sanitized control characters if the first attempt fails.
+
+        LLMs sometimes emit literal control characters (\\n, \\t, etc.) inside
+        JSON string values, which json.loads rejects with 'Invalid control character'.
+        """
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            import re
+            _escape_map = {'\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f'}
+            sanitized = re.sub(r'[\x00-\x1f]', lambda m: _escape_map.get(m.group(), ''), s)
+            return json.loads(sanitized)
+
+    @staticmethod
     def _parse_tool_calls(response_text):
         """Parse tool calls from response text. Handles three formats:
         1. Array format: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
@@ -156,7 +169,7 @@ class Generator:
                     bracket_count -= 1
                 end_idx += 1
             tool_json = after_tc[:end_idx]
-            tool_calls = json.loads(tool_json)
+            tool_calls = Generator._safe_json_loads(tool_json)
 
         elif '[ARGS]' in after_tc:
             # Named format: name[ARGS]{json}
@@ -182,7 +195,7 @@ class Generator:
                             break
 
                 args_json = args_part[:end_idx] if end_idx > 0 else "{}"
-                tool_args = json.loads(args_json) if args_json else {}
+                tool_args = Generator._safe_json_loads(args_json) if args_json else {}
                 tool_calls.append({"name": tool_name, "arguments": tool_args})
 
         elif '{' in after_tc:
@@ -203,7 +216,7 @@ class Generator:
                         break
 
             args_json = args_str[:end_idx] if end_idx > 0 else "{}"
-            tool_args = json.loads(args_json)
+            tool_args = Generator._safe_json_loads(args_json)
 
             if tool_name:
                 tool_calls.append({"name": tool_name, "arguments": tool_args})
@@ -234,7 +247,7 @@ class Generator:
             tool_result = Generator.google_custom_search(tool_args.get("query", ""))
         elif tool_name == "duckduckgo_search":
             tool_result = Generator.duckduckgo_search(
-                tool_args.get("query", ""), tool_args.get("max_results", 8))
+                tool_args.get("query", ""), max(7, tool_args.get("max_results", 7)))
         elif tool_name == "fetch_url_content":
             tool_result = Generator.fetch_url_content(
                 tool_args.get("url", ""), tool_args.get("max_chars", 8000))
@@ -275,100 +288,8 @@ class Generator:
         Captures verbose output from MLX generate() and emits tokens as they're generated.
         """
         if stream_callback is None:
-            # Capture stdout so we can fix BPE artifacts in the verbose printout
-            # before the user sees it (generate() prints raw BPE chars directly).
-            old_stdout = sys.stdout
-            sys.stdout = _captured = io.StringIO()
-            try:
-                result = generate(
-                    model=model,
-                    tokenizer=tokenizer,
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    sampler=sampler,
-                    logits_processors=logits_processors,
-                    prompt_cache=prompt_cache,
-                    verbose=verbose
-                )
-            finally:
-                sys.stdout = old_stdout
-            fixed = Generator._fix_bpe_artifacts(result)
-            if verbose:
-                print(Generator._fix_bpe_artifacts(_captured.getvalue()), end='')
-            return fixed
-
-        # Redirect stdout to capture verbose output
-        old_stdout = sys.stdout
-        sys.stdout = captured_output = io.StringIO()
-
-        try:
-            # Generate with verbose=True (prints tokens to stdout)
-            # We'll capture these and emit them via callback
-            import threading
-            import time
-
-            # Track what we've already emitted
-            last_pos = 0
-            generation_complete = False
-            pending_buffer = ""
-            tool_call_found = False
-            TOOL_MARKER = '[TOOL_CALLS]'
-            TOOL_MARKER_LEN = len(TOOL_MARKER)
-
-            def monitor_output():
-                nonlocal last_pos, generation_complete, pending_buffer, tool_call_found
-                while not generation_complete:
-                    # Get current output
-                    current_output = captured_output.getvalue()
-
-                    # Check if there's new content
-                    if len(current_output) > last_pos:
-                        new_content = current_output[last_pos:]
-                        last_pos = len(current_output)
-
-                        # Skip emitting once a tool call is detected
-                        if tool_call_found:
-                            time.sleep(0.01)
-                            continue
-
-                        # Filter out verbose stats lines (Prompt:, Generation:, Peak memory:, =====)
-                        if not verbose and stream_callback:
-                            # Skip stats lines
-                            lines_to_emit = []
-                            for line in new_content.split('\n'):
-                                if not any(marker in line for marker in ['Prompt:', 'Generation:', 'Peak memory:', '====', 'tokens-per-sec']):
-                                    lines_to_emit.append(line)
-                            new_content = '\n'.join(lines_to_emit)
-
-                        # Buffer content and check for [TOOL_CALLS] marker before emitting
-                        pending_buffer += new_content
-                        marker_idx = pending_buffer.find(TOOL_MARKER)
-
-                        if marker_idx >= 0:
-                            # Tool call detected - only emit text before the marker
-                            tool_call_found = True
-                            to_emit = pending_buffer[:marker_idx]
-                            if stream_callback and to_emit.strip():
-                                stream_callback('text_chunk', {'text': Generator._fix_bpe_artifacts(to_emit)})
-                            pending_buffer = ""
-                        elif len(pending_buffer) > TOOL_MARKER_LEN:
-                            # No marker yet - emit safe portion, keep tail buffered
-                            # to catch markers that span across chunks
-                            safe = pending_buffer[:-TOOL_MARKER_LEN]
-                            pending_buffer = pending_buffer[-TOOL_MARKER_LEN:]
-                            if stream_callback and safe.strip():
-                                stream_callback('text_chunk', {'text': Generator._fix_bpe_artifacts(safe)})
-
-                    # Small delay to avoid busy waiting
-                    time.sleep(0.01)
-
-            # Start monitoring thread
-            monitor_thread = threading.Thread(target=monitor_output, daemon=True)
-            monitor_thread.start()
-
-            # Generate (this will print to captured_output)
-            # Always use verbose=True for streaming, but filter output if verbose=False
-            result = generate(
+            # TODO: i dont like this too much. another approach needs to be done.
+            return Generator._fix_bpe_artifacts(generate(
                 model=model,
                 tokenizer=tokenizer,
                 prompt=prompt,
@@ -376,41 +297,66 @@ class Generator:
                 sampler=sampler,
                 logits_processors=logits_processors,
                 prompt_cache=prompt_cache,
-                verbose=True
-            )
+                verbose=verbose
+            ))
 
-            # Mark generation as complete
-            generation_complete = True
-            monitor_thread.join(timeout=0.1)
+        # Use stream_generate + _decode_tokens to bypass tokenizer.decode() entirely.
+        # This avoids BPE artifact issues (e.g. Ministral Ġ/space mismatch) without
+        # needing to capture/fix stdout.
+        TOOL_MARKER = '[TOOL_CALLS]'
+        TOOL_MARKER_LEN = len(TOOL_MARKER)
 
-            # Emit any remaining content
-            final_output = captured_output.getvalue()
-            remaining_new = final_output[last_pos:] if len(final_output) > last_pos else ""
+        all_tokens = []
+        emitted = 0       # index into decoded text already sent to callback
+        stop_streaming = False
 
-            if not tool_call_found:
-                # Filter out verbose stats lines if needed
-                if not verbose and stream_callback and remaining_new:
-                    lines_to_emit = []
-                    for line in remaining_new.split('\n'):
-                        if not any(marker in line for marker in ['Prompt:', 'Generation:', 'Peak memory:', '====', 'tokens-per-sec']):
-                            lines_to_emit.append(line)
-                    remaining_new = '\n'.join(lines_to_emit)
+        kwargs = {}
+        if prompt_cache is not None:
+            kwargs['prompt_cache'] = prompt_cache
+        if sampler is not None:
+            kwargs['sampler'] = sampler
+        if logits_processors is not None:
+            kwargs['logits_processors'] = logits_processors
 
-                # Flush pending buffer + remaining, checking for tool call marker
-                pending_buffer += remaining_new
-                marker_idx = pending_buffer.find(TOOL_MARKER)
-                if marker_idx >= 0:
-                    to_emit = pending_buffer[:marker_idx]
-                else:
-                    to_emit = pending_buffer
+        for response in stream_generate(
+            model=model,
+            tokenizer=tokenizer,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            **kwargs
+        ):
+            all_tokens.append(response.token)
+            if stop_streaming:
+                continue
+
+            decoded = Generator._decode_tokens(tokenizer, all_tokens)
+            remaining = decoded[emitted:]
+            mi = remaining.find(TOOL_MARKER)
+
+            if mi >= 0:
+                to_emit = remaining[:mi]
                 if stream_callback and to_emit.strip():
-                    stream_callback('text_chunk', {'text': Generator._fix_bpe_artifacts(to_emit)})
+                    stream_callback('text_chunk', {'text': to_emit})
+                stop_streaming = True
+                continue
 
-            return Generator._fix_bpe_artifacts(result)
+            # Keep a tail buffered to catch markers that span chunk boundaries
+            safe_len = len(remaining) - TOOL_MARKER_LEN
+            if safe_len > 0:
+                if stream_callback:
+                    stream_callback('text_chunk', {'text': remaining[:safe_len]})
+                emitted += safe_len
 
-        finally:
-            # Restore stdout
-            sys.stdout = old_stdout
+        # Flush remaining after generation ends
+        full_text = Generator._decode_tokens(tokenizer, all_tokens)
+        remaining = full_text[emitted:]
+        if not stop_streaming and remaining:
+            mi = remaining.find(TOOL_MARKER)
+            to_emit = remaining[:mi] if mi >= 0 else remaining
+            if stream_callback and to_emit.strip():
+                stream_callback('text_chunk', {'text': to_emit})
+
+        return full_text
 
     @staticmethod
     def summarize_passages(passages, llm_model, llm_tokenizer): # LLM summarizes retrieved info/context.
@@ -518,7 +464,7 @@ class Generator:
             return f"Error performing Google Search: {str(e)}"
 
     @staticmethod
-    def duckduckgo_search(query: str, max_results: int = 8) -> dict:
+    def duckduckgo_search(query: str, max_results: int = 7) -> dict:
         """Search DuckDuckGo (free, no API key required)."""
         try:
             # Try the newer ddgs package first, fallback to duckduckgo_search
@@ -580,13 +526,40 @@ class Generator:
             return {'error': str(e), 'url': url}
 
     @staticmethod
+    def _get_advanced_reasoning_tool():
+        """Returns the activate_advanced_reasoning tool definition."""
+        return {
+            "type": "function",
+            "function": {
+                "name": "activate_advanced_reasoning",
+                "description": (
+                    "Activate advanced multi-step reasoning for complex questions that require "
+                    "deep analysis, multi-source research, planning, and synthesis. Use this for "
+                    "questions that are difficult, multi-faceted, require cross-referencing multiple "
+                    "sources, involve step-by-step reasoning, or need comprehensive analysis. "
+                    "Do NOT use for simple factual questions that can be answered directly."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The complex question or task to reason about."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+
+    @staticmethod
     def answer_query_with_llm(query, llm_model, llm_tokenizer, retriever, prompt_cache=None, stream_callback=None, verbose=True, conversation_manager=None):
 
-        if ADVANCED_REASONING:
-            from RAG_Framework.components.generators import AgenticGenerator
         from RAG_Framework.agents.tools import get_tools_for_standard_generator
 
         tools = get_tools_for_standard_generator()
+        if ADVANCED_REASONING:
+            tools = tools + [Generator._get_advanced_reasoning_tool()]
 
         # Temperature and top sampling
         sampler = make_sampler(temp=0.3, top_p=0.9)
@@ -670,6 +643,42 @@ class Generator:
                         break
 
                     print(f"Found {len(tool_calls)} tool call(s): {[call.get('name', 'unknown') for call in tool_calls]}")
+
+                    # Special case: activate_advanced_reasoning delegates to AgenticGenerator
+                    if ADVANCED_REASONING:
+                        adv_call = next(
+                            (call for call in tool_calls if call.get("name") == "activate_advanced_reasoning"),
+                            None
+                        )
+                        if adv_call is not None:
+                            reasoning_query = adv_call.get("arguments", {}).get("query", query)
+                            call_id = ''.join(random.choices(string.ascii_letters + string.digits, k=9))
+                            print(f"\n[ADVANCED REASONING] Delegating to AgenticGenerator for: {reasoning_query}")
+
+                            if stream_callback:
+                                stream_callback('tool_call_start', {
+                                    'tool_id': call_id,
+                                    'tool_name': 'activate_advanced_reasoning',
+                                    'arguments': {'query': reasoning_query}
+                                })
+
+                            from RAG_Framework.components.generators.reasoning import AgenticGenerator
+                            # Pass conversation_manager=None so AgenticGenerator manages its own
+                            # synthesis conversation without re-adding the user message.
+                            response_text = AgenticGenerator.agentic_answer_query(
+                                query=reasoning_query,
+                                llm_model=llm_model,
+                                llm_tokenizer=llm_tokenizer,
+                                retriever=retriever,
+                                prompt_cache=prompt_cache,
+                                conversation_manager=None,
+                                stream_callback=stream_callback
+                            )
+
+                            # Keep standard conversation_manager in sync
+                            conversation_manager.add_assistant_message(response_text)
+
+                            return response_text, prompt
 
                     # Format tool calls for conversation
                     formatted_tool_calls = []

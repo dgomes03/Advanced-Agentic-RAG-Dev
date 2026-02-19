@@ -79,27 +79,12 @@ def get_tools_for_standard_generator():
             {
                 "type": "function",
                 "function": {
-                    "name": "google_custom_search",
-                    "description": "Search the internet using Google. Use for current events or general knowledge.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The search query string."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "duckduckgo_search",
-                    "description": "Search the web using DuckDuckGo. Use for current events or general knowledge.",
+                    "description": "Search the web using DuckDuckGo. Returns 7 results with titles, URLs, and snippets. Use for current events or general knowledge.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "description": "The search query"},
-                            "max_results": {"type": "integer", "description": "Max results (default 5)", "default": 5}
+                            "query": {"type": "string", "description": "The search query"}
                         },
                         "required": ["query"]
                     }
@@ -109,7 +94,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "fetch_url_content",
-                    "description": "Fetch and extract the main text content from a web page. Use after duckduckgo_search or google_custom_search to get full webpage content.",
+                    "description": "Fetch and extract the main text content from a web page. ONLY use URLs that were returned by a prior duckduckgo_search or search_wikipedia result. NEVER invent, guess, or construct URLs.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -181,7 +166,7 @@ def get_tools_for_agentic_generator():
                 "type": "function",
                 "function": {
                     "name": "agentic_generator",
-                    "description": "Call advanced task agent if user is asking for a difficult task.",
+                    "description": "Call advanced task agent if user is asking for a very difficult task that evolves multi-step reasoning or many different web searches.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -261,27 +246,12 @@ def get_tools_for_agentic_generator():
             {
                 "type": "function",
                 "function": {
-                    "name": "google_custom_search",
-                    "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "The search query string."}
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "duckduckgo_search",
-                    "description": "Search the web using DuckDuckGo. Returns titles, snippets, and URLs. Use fetch_url_content to get full page content from promising results.",
+                    "description": "Search the web using DuckDuckGo. Returns 7 results with titles, URLs, and snippets. Use fetch_url_content ONLY on URLs that appear in these results.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "description": "The search query"},
-                            "max_results": {"type": "integer", "description": "Max results (default 5)", "default": 5}
+                            "query": {"type": "string", "description": "The search query"}
                         },
                         "required": ["query"]
                     }
@@ -291,7 +261,7 @@ def get_tools_for_agentic_generator():
                 "type": "function",
                 "function": {
                     "name": "fetch_url_content",
-                    "description": "Fetch and extract the main text content from a web page. Use after duckduckgo_search or google_custom_search to get full article content instead of just snippets.",
+                    "description": "Fetch and extract the main text content from a web page. ONLY use URLs that were returned by a prior duckduckgo_search or search_wikipedia result. NEVER invent, guess, or construct URLs.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -352,3 +322,17 @@ def get_tools_for_agentic_generator():
                 }
             }
     ]
+"""            {
+                "type": "function",
+                "function": {
+                    "name": "google_custom_search",
+                    "description": "Search the internet using Google Custom Search JSON API. Use for current events or information not found in documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query string."}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },"""

@@ -381,6 +381,11 @@ class SidebarManager {
                         UIComponents.updateToolCallResult(toolId, tool.result, tool.status);
                     });
                 }
+
+                // Restore reasoning panel if present
+                if (msg.reasoning && msg.reasoning.goals && msg.reasoning.goals.length > 0) {
+                    UIComponents.restoreReasoningPanel(msgId, msg.reasoning);
+                }
             }
         });
 
@@ -459,7 +464,7 @@ class SidebarManager {
                             }
                         }
                     }
-                    // Include tool calls if present
+                    // Include tool calls if present (exclude activate_advanced_reasoning — shown via reasoning panel)
                     const toolCards = el.querySelectorAll('.tool-card');
                     if (toolCards.length > 0) {
                         msg.tool_calls = [];
@@ -474,6 +479,56 @@ class SidebarManager {
                                 result: resultContent
                             });
                         });
+                    }
+                    // Include reasoning panel data if present
+                    const reasoningContainer = el.querySelector('.reasoning-container');
+                    if (reasoningContainer && reasoningContainer.style.display !== 'none') {
+                        const panel = reasoningContainer.querySelector('.reasoning-panel');
+                        if (panel) {
+                            const goalEls = panel.querySelectorAll('.goal');
+                            if (goalEls.length > 0) {
+                                const reasoning = {};
+                                const counter = panel.querySelector('.reasoning-step-counter');
+                                if (counter && counter.textContent) reasoning.step_counter = counter.textContent;
+                                reasoning.goals = [];
+                                goalEls.forEach(goalEl => {
+                                    const g = {
+                                        index: parseInt(goalEl.getAttribute('data-goal-index'), 10),
+                                        description: goalEl.querySelector('.goal-text')?.textContent || '',
+                                        priority_tag: goalEl.querySelector('.goal-priority-tag')?.textContent || 'P2',
+                                        strategy_tag: goalEl.querySelector('.goal-strategy-tag')?.textContent || 'hybrid',
+                                        status: goalEl.className.replace('goal', '').trim()
+                                    };
+                                    // Collect source cards
+                                    const sourceItems = goalEl.querySelectorAll('.goal-source-item');
+                                    if (sourceItems.length > 0) {
+                                        g.sources = [];
+                                        sourceItems.forEach(item => {
+                                            const labelEl = item.querySelector('.goal-source-label');
+                                            g.sources.push({
+                                                tool_name: item.getAttribute('data-tool-name') || '',
+                                                label: labelEl?.textContent || labelEl?.getAttribute('href') || '',
+                                                chars_text: item.querySelector('.goal-source-chars')?.textContent || '',
+                                                preview: item.querySelector('.goal-source-preview')?.textContent || ''
+                                            });
+                                        });
+                                    }
+                                    const scoresEl = goalEl.querySelector('.goal-scores');
+                                    if (scoresEl && scoresEl.style.display !== 'none') {
+                                        g.scores = {
+                                            confidence_width: goalEl.querySelector('.confidence-fill')?.style.width || '0%',
+                                            confidence_text: goalEl.querySelector('.confidence-value')?.textContent || '0%',
+                                            info_gain_width: goalEl.querySelector('.info-gain-fill')?.style.width || '0%',
+                                            info_gain_text: goalEl.querySelector('.info-gain-value')?.textContent || '0%',
+                                            flags_html: goalEl.querySelector('.goal-flags')?.innerHTML || '',
+                                            reasoning: goalEl.querySelector('.goal-reasoning')?.textContent || ''
+                                        };
+                                    }
+                                    reasoning.goals.push(g);
+                                });
+                                msg.reasoning = reasoning;
+                            }
+                        }
                     }
                     messages.push(msg);
                 }

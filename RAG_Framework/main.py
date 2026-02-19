@@ -147,11 +147,9 @@ if __name__ == "__main__":
         print("\nReady to answer queries. (Type 'exit' to quit)")
 
         if ADVANCED_REASONING:
-            from RAG_Framework.components.generators.reasoning import AgenticGenerator
-            print("Using Advanced Reasoning mode with agentic generator")
+            print("Using Advanced Reasoning mode (standard generator + advanced reasoning tool)")
         elif REASONING_MODEL:
             from RAG_Framework.components.generators.LRM import LRMGenerator
-            
 
         try:
             while True:
@@ -166,16 +164,7 @@ if __name__ == "__main__":
                     continue
 
                 # Use the appropriate generator
-                if ADVANCED_REASONING:
-                    rag_response = AgenticGenerator.agentic_answer_query(
-                        query,
-                        llm_model,
-                        llm_tokenizer,
-                        retriever,
-                        prompt_cache,
-                        conversation_manager
-                    )
-                elif REASONING_MODEL:
+                if REASONING_MODEL and not ADVANCED_REASONING:
                     rag_response = LRMGenerator.answer_query_with_llm(
                         query,
                         llm_model,
@@ -185,6 +174,8 @@ if __name__ == "__main__":
                         conversation_manager=conversation_manager
                     )
                 else:
+                    # Standard generator — includes activate_advanced_reasoning tool
+                    # when ADVANCED_REASONING = True in config
                     rag_response = Generator.answer_query_with_llm(
                         query,
                         llm_model,
