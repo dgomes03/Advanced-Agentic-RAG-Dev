@@ -180,8 +180,6 @@ class UIComponents {
 
         goalEl.setAttribute('data-goal-index', index);
         goalEl.querySelector('.goal-text').textContent = goalData.description;
-        goalEl.querySelector('.goal-priority-tag').textContent = `P${goalData.priority || 2}`;
-        goalEl.querySelector('.goal-strategy-tag').textContent = goalData.strategy || 'hybrid';
 
         container.appendChild(clone);
     }
@@ -321,6 +319,21 @@ class UIComponents {
         const goalEl = panel.querySelector(`[data-goal-index="${goalIndex}"]`);
         if (!goalEl) return;
 
+        // Handle cancelled goals
+        if (data.cancelled) {
+            goalEl.className = 'goal cancelled';
+            const scoresEl = goalEl.querySelector('.goal-scores');
+            if (scoresEl) {
+                scoresEl.style.display = 'block';
+                const flagsEl = scoresEl.querySelector('.goal-flags');
+                if (flagsEl) flagsEl.innerHTML = '<span class="goal-flag sparse">✗ Cancelled</span>';
+                const reasoningEl = scoresEl.querySelector('.goal-reasoning');
+                if (reasoningEl && data.reasoning) reasoningEl.textContent = `"${data.reasoning}"`;
+            }
+            this.scrollToBottom();
+            return;
+        }
+
         // Mark goal completed
         goalEl.className = 'goal completed';
 
@@ -377,10 +390,16 @@ class UIComponents {
         const goalsContainer = panel.querySelector('.reasoning-goals');
         if (!goalsContainer || !data.new_goals || !data.new_goals.length) return;
 
+        // Mark the replaced goal as failed if index provided
+        if (data.replaced_goal_index !== undefined) {
+            const replacedEl = goalsContainer.querySelector(`[data-goal-index="${data.replaced_goal_index}"]`);
+            if (replacedEl) replacedEl.className = 'goal failed';
+        }
+
         const existingCount = goalsContainer.querySelectorAll('.goal').length;
         data.new_goals.forEach((goalDesc, i) => {
             const goalData = typeof goalDesc === 'string'
-                ? { description: goalDesc, priority: 2, strategy: 'hybrid' }
+                ? { description: goalDesc }
                 : goalDesc;
             this._createGoalElement(goalsContainer, goalData, existingCount + i);
         });
@@ -549,9 +568,7 @@ class UIComponents {
             goalEl.setAttribute('data-goal-index', g.index);
             goalEl.className = g.status ? `goal ${g.status}` : 'goal';
             goalEl.querySelector('.goal-text').textContent = g.description;
-            goalEl.querySelector('.goal-priority-tag').textContent = g.priority_tag;
-            goalEl.querySelector('.goal-strategy-tag').textContent = g.strategy_tag;
-
+    
             // Restore source cards — migrate old single-tool format if needed
             const sourcesContainer = goalEl.querySelector('.goal-sources');
             if (sourcesContainer) {

@@ -64,7 +64,19 @@ SERVER_PORT = 5050
 # === Reasoning Configuration ===
 ADVANCED_REASONING = True # isto so ativa a tool q permite o LLM aceder a esta pipeline, by default usa a pipeline normal.
 MAX_REASONING_STEPS = 5
+MAX_REASONING_GOALS = 4           # Max sub-goals the planner can create
 MIN_CONFIDENCE_THRESHOLD = 0.7
+
+# Web search loop controls
+DUCKDUCKGO_RESULTS_COUNT = 6      # Results per DDG search call
+MAX_URLS_PER_SEARCH_LOOP = 3      # Max URLs fetched per search loop
+MAX_FETCH_URL_CHARS = 5000       # Max characters kept from each fetched URL
+MAX_EVAL_CHARS_PER_SOURCE = 800  # Max characters per source sent to the evaluator
+MAX_SEARCH_LOOPS = 1              # Max search+fetch loops per goal (TODO: ISTO ACHO Q TA BROKEN, ELE PESQUISA A MESMA COISA)
+
+# Replanning limits
+MAX_REPLANS_PER_GOAL = 2          # Per-goal: after N failed replans → cancel
+MAX_TOTAL_REPLANS = 5             # Total replans allowed across all goals
 
 # === Language Reasoning Model (LRM) Configuration ===
 REASONING_MODEL = False  

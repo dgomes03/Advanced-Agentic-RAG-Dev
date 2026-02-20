@@ -495,8 +495,7 @@ class SidebarManager {
                                     const g = {
                                         index: parseInt(goalEl.getAttribute('data-goal-index'), 10),
                                         description: goalEl.querySelector('.goal-text')?.textContent || '',
-                                        priority_tag: goalEl.querySelector('.goal-priority-tag')?.textContent || 'P2',
-                                        strategy_tag: goalEl.querySelector('.goal-strategy-tag')?.textContent || 'hybrid',
+                                        strategy_tag: '',
                                         status: goalEl.className.replace('goal', '').trim()
                                     };
                                     // Collect source cards

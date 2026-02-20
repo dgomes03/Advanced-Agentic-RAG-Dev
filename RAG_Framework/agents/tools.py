@@ -94,7 +94,7 @@ def get_tools_for_standard_generator():
                 "type": "function",
                 "function": {
                     "name": "fetch_url_content",
-                    "description": "Fetch and extract the main text content from a web page. ONLY use URLs that were returned by a prior duckduckgo_search or search_wikipedia result. NEVER invent, guess, or construct URLs.",
+                    "description": "Fetch and extract the main text content from a web page. ONLY use URLs that were returned by a prior duckduckgo_search or search_wikipedia result. NEVER invent, guess, or construct URLs. NEVER fetch YouTube URLs. NEVER fetch PDF URLs.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -261,7 +261,7 @@ def get_tools_for_agentic_generator():
                 "type": "function",
                 "function": {
                     "name": "fetch_url_content",
-                    "description": "Fetch and extract the main text content from a web page. ONLY use URLs that were returned by a prior duckduckgo_search or search_wikipedia result. NEVER invent, guess, or construct URLs.",
+                    "description": "Fetch and extract the main text content from a web page. ONLY use URLs that were returned by a prior duckduckgo_search or search_wikipedia result. NEVER invent, guess, or construct URLs. NEVER fetch YouTube URLs. NEVER fetch PDF URLs.",
                     "parameters": {
                         "type": "object",
                         "properties": {

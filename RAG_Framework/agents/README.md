@@ -1,0 +1,1 @@
+Esta pasta serve apenas para guardar core components do Advanced Reasoning. Este retriever não pertence à pasta retriever porque não é tecnicamente a mesma scope. Talvez não seja mau repensar os nomes no futuro.
