@@ -1,3 +1,4 @@
+import math
 import os
 import re
 import threading
@@ -8,7 +9,8 @@ from mlx_lm import generate
 
 from RAG_Framework.core.config import (
     BM25_ENABLE_STEMMING, BM25_ENABLE_STOPWORDS, BM25_LANGUAGES,
-    EMBEDDING_USE_PREFIX, RETRIEVAL_TOP_K, RERANKER_TOP_N, PARENT_TOP_N
+    EMBEDDING_USE_PREFIX, RETRIEVAL_TOP_K, RERANKER_TOP_N, PARENT_TOP_N,
+    RERANKER_CONFIDENCE_THRESHOLD,
 )
 from RAG_Framework.core.text_processing import tokenize_for_bm25, prepare_for_embedding
 
@@ -267,13 +269,31 @@ class Retriever:
             alternatives = [query]
         return alternatives
 
-    def rerank_chunks_with_metadata(self, query, chunks, metadata_list, top_n=None):
+    def rerank_chunks_with_metadata(self, query, chunks, metadata_list, top_n=None, threshold=None):
         pairs = [[query, chunk] for chunk in chunks]
         scores = self.reranker.predict(pairs)
         combined = list(zip(chunks, metadata_list, scores))
         reranked = sorted(combined, key=lambda x: x[2], reverse=True)
         if top_n:
             reranked = reranked[:top_n]
+        for chunk, meta, score in reranked:
+            print(f"  score={1.0 / (1.0 + math.exp(-float(score))):.3f}  {chunk[:60]}", flush=True)
+        if threshold is not None:
+            # Convert raw reranker logits to sigmoid probabilities for thresholding
+            filtered = [
+                (chunk, meta, score) for chunk, meta, score in reranked
+                if 1.0 / (1.0 + math.exp(-float(score))) >= threshold
+            ]
+            if not filtered and reranked:
+                # Always keep at least the best result to avoid empty context
+                best = reranked[0]
+                best_prob = 1.0 / (1.0 + math.exp(-float(best[2])))
+                print(
+                    f"Warning: All {len(reranked)} chunks below confidence threshold "
+                    f"{threshold:.2f} (best: {best_prob:.3f}). Keeping top result."
+                )
+                filtered = [best]
+            reranked = filtered
         return [(chunk, meta) for chunk, meta, score in reranked]
 
     def combined_retrieval(
@@ -337,7 +357,10 @@ class Retriever:
         retrieved_metadata = [self.multi_vector_index[idx]["metadata"] for idx in top_indices]
 
         # Rerank chunks while preserving metadata
-        reranked = self.rerank_chunks_with_metadata(query, retrieved_chunks, retrieved_metadata, top_n=rerank_top_n)
+        reranked = self.rerank_chunks_with_metadata(
+            query, retrieved_chunks, retrieved_metadata,
+            top_n=rerank_top_n, threshold=RERANKER_CONFIDENCE_THRESHOLD,
+        )
 
         # Resolve to parent chunks if hierarchical mode is active
         resolved = self._resolve_parents(reranked, top_n=PARENT_TOP_N)
@@ -403,7 +426,10 @@ class Retriever:
         retrieved_chunks = [self.multi_vector_index[idx]["text"] for idx in top_indices]
         retrieved_metadata = [self.multi_vector_index[idx]["metadata"] for idx in top_indices]
 
-        reranked = self.rerank_chunks_with_metadata(query, retrieved_chunks, retrieved_metadata, top_n=rerank_top_n)
+        reranked = self.rerank_chunks_with_metadata(
+            query, retrieved_chunks, retrieved_metadata,
+            top_n=rerank_top_n, threshold=RERANKER_CONFIDENCE_THRESHOLD,
+        )
 
         # Resolve to parent chunks if hierarchical mode is active
         resolved = self._resolve_parents(reranked, top_n=PARENT_TOP_N)

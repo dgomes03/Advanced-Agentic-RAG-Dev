@@ -9,6 +9,7 @@ from mlx_lm import generate
 from mlx_lm.sample_utils import make_sampler
 
 from RAG_Framework.core.config import MAX_REASONING_GOALS
+from RAG_Framework.core.BPE_decode import BPEDecoder
 
 _PLANNER_SAMPLER = make_sampler(temp=0.1)
 
@@ -19,8 +20,6 @@ def generate_fixed(model, tokenizer, prompt, max_tokens, verbose=True, sampler=N
     Captures the verbose stdout output, applies the GPT-2 byte decoder to
     strip Ġ/Ċ artifacts, re-prints clean text, and returns the fixed string.
     """
-    from RAG_Framework.components.generators.standard import Generator
-
     kwargs = dict(prompt=prompt, max_tokens=max_tokens, verbose=verbose)
     if sampler is not None:
         kwargs["sampler"] = sampler
@@ -33,9 +32,9 @@ def generate_fixed(model, tokenizer, prompt, max_tokens, verbose=True, sampler=N
         sys.stdout = old_stdout
 
     if verbose:
-        print(Generator._fix_bpe_artifacts(_cap.getvalue()), end='')
+        print(BPEDecoder.fix_bpe_artifacts(_cap.getvalue()), end='')
 
-    return Generator._fix_bpe_artifacts(result)
+    return BPEDecoder.fix_bpe_artifacts(result)
 
 
 def parse_json_safely(response: str) -> Optional[Dict[str, Any]]:
@@ -48,11 +47,7 @@ def parse_json_safely(response: str) -> Optional[Dict[str, Any]]:
     if not response:
         return None
 
-    try:
-        from RAG_Framework.components.generators.standard import Generator
-        response = Generator._fix_bpe_artifacts(response)
-    except ImportError:
-        pass
+    response = BPEDecoder.fix_bpe_artifacts(response)
 
     response = response.strip()
 

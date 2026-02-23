@@ -18,6 +18,8 @@ from mlx_lm.sample_utils import make_sampler, make_logits_processors
 from RAG_Framework.core.config import MAX_RESPONSE_TOKENS
 from RAG_Framework.core.cache_manager import CacheManager
 from RAG_Framework.core.conversation_manager import ConversationManager
+from RAG_Framework.core.parser import parse_tool_calls
+from RAG_Framework.core.BPE_decode import BPEDecoder
 
 
 # State machine states for streaming
@@ -30,113 +32,10 @@ _THINK_END = "[/THINK]"
 _TOOL_MARKER = "[TOOL_CALLS]"
 # Buffer size must cover the longest marker
 _BUFFER_TAIL = max(len(_THINK_START), len(_THINK_END), len(_TOOL_MARKER))
-# Special tokens to omit from decoded text (keep [THINK]/[/THINK] for state machine)
-_SKIP_SPECIAL = {'<s>', '</s>', '<unk>', '<pad>'}
 
 
 class LRMGenerator:
     """Generator for reasoning models with [THINK] block support."""
-
-    _byte_decoder = None  # Lazy-initialized inverse of GPT-2 bytes_to_unicode
-    _inv_vocab = None     # Lazy-initialized inverse vocabulary {id: string}
-    _special_ids = None   # Lazy-initialized set of special token IDs
-
-    @staticmethod
-    def _build_byte_decoder():
-        """Build the inverse of the GPT-2 byte-level BPE bytes_to_unicode mapping.
-
-        In byte-level BPE, each byte (0-255) is mapped to a Unicode character.
-        Printable ASCII maps to itself; non-printable bytes (space, newline, etc.)
-        map to characters starting at U+0100 (e.g. space→Ġ, newline→Ċ).
-        This builds the reverse mapping to convert back.
-        """
-        bs = (
-            list(range(ord("!"), ord("~") + 1))
-            + list(range(ord("¡"), ord("¬") + 1))
-            + list(range(ord("®"), ord("ÿ") + 1))
-        )
-        cs = bs[:]
-        n = 0
-        for b in range(2**8):
-            if b not in bs:
-                bs.append(b)
-                cs.append(2**8 + n)
-                n += 1
-        return {chr(c): b for b, c in zip(bs, cs)}
-
-    @staticmethod
-    def _ensure_vocab(tokenizer):
-        """Lazily build and cache inverse vocabulary and special token set."""
-        if LRMGenerator._byte_decoder is None:
-            LRMGenerator._byte_decoder = LRMGenerator._build_byte_decoder()
-        if LRMGenerator._inv_vocab is None:
-            vocab = tokenizer.get_vocab()
-            LRMGenerator._inv_vocab = {v: k for k, v in vocab.items()}
-            # Build special IDs: all_special_ids + added_tokens_encoder
-            special = set(getattr(tokenizer, 'all_special_ids', []))
-            if hasattr(tokenizer, 'added_tokens_encoder'):
-                special.update(tokenizer.added_tokens_encoder.values())
-            LRMGenerator._special_ids = special
-            # Debug: log vocab stats
-            n_special = len(special)
-            has_g_dot = sum(1 for s in LRMGenerator._inv_vocab.values() if '\u0120' in s)
-            has_metaspace = sum(1 for s in LRMGenerator._inv_vocab.values() if '\u2581' in s)
-            """print(f"[LRM Vocab] {len(LRMGenerator._inv_vocab)} tokens, "
-                  f"{n_special} special, "
-                  f"{has_g_dot} with Ġ(U+0120), "
-                  f"{has_metaspace} with ▁(U+2581)")"""
-
-    @staticmethod
-    def _decode_tokens(tokenizer, tokens):
-        """Decode token IDs to text, bypassing tokenizer.decode() entirely.
-
-        The Ministral tokenizer has a decoder mismatch: the BPE vocabulary uses
-        Ġ (U+0120) as the space marker, but the decoder expects ▁ (U+2581).
-        This causes tokenizer.decode() to strip all spaces from output.
-
-        Instead, we look up raw BPE strings from the cached inverse vocabulary
-        and apply the GPT-2 bytes_to_unicode inverse mapping to recover the
-        original bytes (space, newline, etc.). Also handles ▁ (U+2581) as
-        a space marker in case some tokens use Metaspace encoding.
-        """
-        if not tokens:
-            return ""
-        LRMGenerator._ensure_vocab(tokenizer)
-
-        inv_vocab = LRMGenerator._inv_vocab
-        special_ids = LRMGenerator._special_ids
-        byte_decoder = LRMGenerator._byte_decoder
-
-        # BPE tokens → byte decoder; special tokens → literal strings
-        parts = []
-        byte_buf = bytearray()
-
-        for tok_id in tokens:
-            tok_str = inv_vocab.get(tok_id, '')
-
-            if tok_id in special_ids:
-                # Flush accumulated BPE bytes
-                if byte_buf:
-                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
-                    byte_buf = bytearray()
-                # Keep markers the state machine needs, skip EOS/BOS/etc.
-                if tok_str not in _SKIP_SPECIAL:
-                    parts.append(tok_str)
-            else:
-                # Regular BPE token: each char maps to a byte via bytes_to_unicode
-                for c in tok_str:
-                    if c == '\u2581':
-                        # Metaspace ▁ → space byte (handles mixed encoding)
-                        byte_buf.append(0x20)
-                    elif c in byte_decoder:
-                        byte_buf.append(byte_decoder[c])
-                    else:
-                        byte_buf.extend(c.encode('utf-8'))
-
-        if byte_buf:
-            parts.append(byte_buf.decode('utf-8', errors='ignore'))
-
-        return ''.join(parts)
 
     @staticmethod
     def _extract_thinking(text):
@@ -214,7 +113,7 @@ class LRMGenerator:
             if stop_streaming:
                 continue
 
-            decoded = LRMGenerator._decode_tokens(tokenizer, all_tokens)
+            decoded = BPEDecoder.decode_tokens(tokenizer, all_tokens)
 
             # Process all transitions possible with current decoded text
             while emitted < len(decoded):
@@ -269,7 +168,7 @@ class LRMGenerator:
                     break  # wait for more tokens
 
         # --- Flush after generation ends ---
-        full_text = LRMGenerator._decode_tokens(tokenizer, all_tokens)
+        full_text = BPEDecoder.decode_tokens(tokenizer, all_tokens)
         remaining = full_text[emitted:]
 
         if remaining and state == _STATE_THINKING:
@@ -299,7 +198,7 @@ class LRMGenerator:
                               prompt_cache=None, stream_callback=None,
                               verbose=True, conversation_manager=None):
         from RAG_Framework.agents.tools import get_tools_for_standard_generator
-        from RAG_Framework.components.generators.standard import Generator
+        from RAG_Framework.components.generators.standard import Generator  # for _execute_tool
 
         tools = get_tools_for_standard_generator()
 
@@ -398,7 +297,7 @@ class LRMGenerator:
                     after_tc = after_tc.replace('[/THINK]', '').strip()
                     print(f"[LRM Debug] Tool call text after marker: {after_tc[:300]!r}")
 
-                    tool_calls = Generator._parse_tool_calls(after_tc)
+                    tool_calls = parse_tool_calls(after_tc)
 
                     if not tool_calls:
                         print("No valid tool calls found")

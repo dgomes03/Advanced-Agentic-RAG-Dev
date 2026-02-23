@@ -59,9 +59,6 @@
 % References and Citations
 \RequirePackage{booktabs}
 
-% Add dummy text
-\RequirePackage{lipsum}
-
 % Images & Drawing
 \RequirePackage{graphicx}
 \RequirePackage{xcolor}
@@ -76,8 +73,6 @@
 \RequirePackage{algorithm}
 \RequirePackage[noend]{algpseudocode}
 \RequirePackage{algorithmicx}
-\RequirePackage{minted}
-\usemintedstyle{tango}
 \newcounter{lstlisting}
 
 % Figures and Floats
@@ -93,10 +88,6 @@
 
 % Break URLs at hyphen
 \RequirePackage[hyphens]{url}
-
-% Commands and environments for verbatim text (with hyphenation and for
-% robust use in arguments)
-\RequirePackage{examplep}
 
 % TeX names
 \RequirePackage{texnames}
@@ -179,7 +170,6 @@
     \fancyhf{}
     \fancyfoot[C]{\small \thepage}
     \fancyhead[R]{\footnotesize \leftmark}
-    %\fancyhead[L]{\footnotesize \rightmark} % Removed to avoid overlap
     \renewcommand{\headrulewidth}{0.1pt}
     \assignpagestyle{\chapter}{fancyplain}
 }
@@ -343,7 +333,7 @@
 % % Sectioning formatting
 
 \titleformat{\chapter}[block]{\normalfont\Large\bfseries}{\makebox[1cm][l]{\thechapter}}{0pt}{}{}
-\titlespacing*{\chapter}{0pt}{-16pt plus 2pt minus 2pt}{8pt plus 2pt minus 2pt}
+\titlespacing*{\chapter}{0pt}{-40pt plus 2pt minus 2pt}{8pt plus 2pt minus 2pt}
 
 \titleformat{\section}[block]{\normalfont\bfseries}{\makebox[1cm][l]{\thesection}}{0pt}{}
 \titlespacing*{\section}{0pt}{12pt plus 2pt minus 2pt}{6pt plus 2pt minus 2pt}
@@ -416,10 +406,6 @@
 \newcommand{\country}[1]{\def\@country{#1}}
 % If blankpage is required
 \newcommand\blankpage{\null\thispagestyle{empty}\addtocounter{page}{-1}\newpage}
-
-% Commands for writing the manual
-\newcommand{\com}[1]{\texttt{\textbackslash {#1}}}
-\newcommand{\combrac}[2]{\texttt{\textbackslash{#1}\{#2\}}}
 
 
 % _______________ Colours _______________
@@ -541,25 +527,6 @@
   \newgeometry{left=2.5cm, top=2.5cm, bottom=2.5cm, right=2.5cm}
   \begin{titlepage}
     \centering
-    % University logos at the top
-    \begin{minipage}{0.45\textwidth}
-        \centering
-        \IfFileExists{settings/Logos/ULisboa_logo.png}{%
-            \includegraphics[height=2.5cm]{settings/Logos/ULisboa_logo.png}%
-        }{%
-            \framebox[3cm][c]{\parbox{2.8cm}{\centering\small ULisboa Logo\\(placeholder)}}%
-        }
-    \end{minipage}%
-    \hfill
-    \begin{minipage}{0.45\textwidth}
-        \centering
-        \IfFileExists{settings/Logos/ISA_logo.png}{%
-            \includegraphics[height=2.5cm]{settings/Logos/ISA_logo.png}%
-        }{%
-            \framebox[3cm][c]{\parbox{2.8cm}{\centering\small ISA Logo\\(placeholder)}}%
-        }
-    \end{minipage}
-
     \vspace{0.8cm}
     {\scshape\Large Universidade de Lisboa}\par
     \vspace{2mm}

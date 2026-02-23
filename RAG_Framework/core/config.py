@@ -41,9 +41,10 @@ BM25_ENABLE_STOPWORDS = True
 BM25_LANGUAGES = ['english', 'portuguese']  # Languages for stemmer and stop words
 
 # === Retrieval Configuration ===
-RETRIEVAL_TOP_K = 40        # Number of candidates retrieved from FAISS + BM25
-RERANKER_TOP_N = 20         # Number of results kept after reranking
+RETRIEVAL_TOP_K = 100        # Number of candidates retrieved from FAISS + BM25
+RERANKER_TOP_N = 30         # Number of results kept after reranking
 PARENT_TOP_N = 15            # Max parent chunks returned after dedup (hierarchical mode only)
+RERANKER_CONFIDENCE_THRESHOLD = 0.3  # None = disabled; float in [0,1] to drop low-relevance chunks (e.g. 0.3). Applied via sigmoid on raw reranker scores.
 
 # === FAISS Configuration ===
 FAISS_INDEX_TYPE = 'auto'  # Options: 'flat', 'ivf', 'hnsw', 'auto'
@@ -61,6 +62,10 @@ ENABLE_SERVER = True
 SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5050
 
+# Web search controls
+MAX_FETCH_URL_CHARS = 5000       # Max characters kept from each fetched URL
+DUCKDUCKGO_RESULTS_COUNT = 6      # Results per DDG search call
+
 # === Reasoning Configuration ===
 ADVANCED_REASONING = True # isto so ativa a tool q permite o LLM aceder a esta pipeline, by default usa a pipeline normal.
 MAX_REASONING_STEPS = 5
@@ -68,9 +73,8 @@ MAX_REASONING_GOALS = 4           # Max sub-goals the planner can create
 MIN_CONFIDENCE_THRESHOLD = 0.7
 
 # Web search loop controls
-DUCKDUCKGO_RESULTS_COUNT = 6      # Results per DDG search call
 MAX_URLS_PER_SEARCH_LOOP = 3      # Max URLs fetched per search loop
-MAX_FETCH_URL_CHARS = 5000       # Max characters kept from each fetched URL
+
 MAX_EVAL_CHARS_PER_SOURCE = 800  # Max characters per source sent to the evaluator
 MAX_SEARCH_LOOPS = 1              # Max search+fetch loops per goal (TODO: ISTO ACHO Q TA BROKEN, ELE PESQUISA A MESMA COISA)
 

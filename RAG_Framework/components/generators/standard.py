@@ -4,226 +4,17 @@ import string
 from mlx_lm import generate, stream_generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 
-from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING, GOOGLE_CX, GOOGLE_API_KEY
+from RAG_Framework.core.config import MAX_RESPONSE_TOKENS, ADVANCED_REASONING
 from RAG_Framework.core.cache_manager import CacheManager
 from RAG_Framework.core.conversation_manager import ConversationManager
-
-
-_SKIP_SPECIAL = {'<s>', '</s>', '<unk>', '<pad>'}
+from RAG_Framework.core.parser import parse_tool_calls
+from RAG_Framework.core.BPE_decode import BPEDecoder
+from RAG_Framework.tools.wikipedia import search_wikipedia
+from RAG_Framework.tools.web_search import duckduckgo_search, google_custom_search
+from RAG_Framework.tools.fetch_url import fetch_url_content
 
 
 class Generator:
-    _byte_decoder = None  # Lazy-initialized inverse of GPT-2 bytes_to_unicode
-    _inv_vocab = None     # Lazy-initialized inverse vocabulary {id: string}
-    _special_ids = None   # Lazy-initialized set of special token IDs
-
-    @staticmethod
-    def _build_byte_decoder():
-        """Build the inverse of the GPT-2 byte-level BPE bytes_to_unicode mapping."""
-        bs = (
-            list(range(ord("!"), ord("~") + 1))
-            + list(range(ord("¡"), ord("¬") + 1))
-            + list(range(ord("®"), ord("ÿ") + 1))
-        )
-        cs = bs[:]
-        n = 0
-        for b in range(2**8):
-            if b not in bs:
-                bs.append(b)
-                cs.append(2**8 + n)
-                n += 1
-        return {chr(c): b for b, c in zip(bs, cs)}
-
-    @staticmethod
-    def _ensure_vocab(tokenizer):
-        """Lazily build and cache inverse vocabulary and special token set."""
-        if Generator._byte_decoder is None:
-            Generator._byte_decoder = Generator._build_byte_decoder()
-        if Generator._inv_vocab is None:
-            vocab = tokenizer.get_vocab()
-            Generator._inv_vocab = {v: k for k, v in vocab.items()}
-            special = set(getattr(tokenizer, 'all_special_ids', []))
-            if hasattr(tokenizer, 'added_tokens_encoder'):
-                special.update(tokenizer.added_tokens_encoder.values())
-            Generator._special_ids = special
-
-    @staticmethod
-    def _decode_tokens(tokenizer, tokens):
-        """Decode token IDs to text, bypassing tokenizer.decode() entirely.
-
-        Handles tokenizers where the BPE vocabulary uses Ġ (U+0120) as the
-        space marker but the decoder expects ▁ (U+2581), which causes
-        tokenizer.decode() to strip all spaces from output.
-        """
-        if not tokens:
-            return ""
-        Generator._ensure_vocab(tokenizer)
-
-        inv_vocab = Generator._inv_vocab
-        special_ids = Generator._special_ids
-        byte_decoder = Generator._byte_decoder
-
-        parts = []
-        byte_buf = bytearray()
-
-        for tok_id in tokens:
-            tok_str = inv_vocab.get(tok_id, '')
-
-            if tok_id in special_ids:
-                if byte_buf:
-                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
-                    byte_buf = bytearray()
-                if tok_str not in _SKIP_SPECIAL:
-                    parts.append(tok_str)
-            else:
-                for c in tok_str:
-                    if c == '\u2581':
-                        byte_buf.append(0x20)
-                    elif c in byte_decoder:
-                        byte_buf.append(byte_decoder[c])
-                    else:
-                        byte_buf.extend(c.encode('utf-8'))
-
-        if byte_buf:
-            parts.append(byte_buf.decode('utf-8', errors='ignore'))
-
-        return ''.join(parts)
-
-    @staticmethod
-    def _fix_bpe_artifacts(text):
-        """Post-process a string returned by generate() to fix BPE decoding artifacts.
-
-        When tokenizer.decode() has a decoder mismatch (e.g. Ministral), generate()
-        returns raw BPE chars like Ġ (space), Ċ (newline), ðŁĺĬ (emoji bytes).
-        Applies the GPT-2 byte decoder char-by-char to recover proper UTF-8 text.
-        Only activates when Ġ (U+0120) or ▁ (U+2581) artifacts are detected.
-        """
-        if '\u0120' not in text and '\u2581' not in text:
-            return text
-        if Generator._byte_decoder is None:
-            Generator._byte_decoder = Generator._build_byte_decoder()
-        byte_decoder = Generator._byte_decoder
-        byte_buf = bytearray()
-        parts = []
-        for c in text:
-            if c == '\u2581':
-                byte_buf.append(0x20)
-            elif c in byte_decoder:
-                byte_buf.append(byte_decoder[c])
-            else:
-                if byte_buf:
-                    parts.append(byte_buf.decode('utf-8', errors='ignore'))
-                    byte_buf = bytearray()
-                parts.append(c)
-        if byte_buf:
-            parts.append(byte_buf.decode('utf-8', errors='ignore'))
-        return ''.join(parts)
-
-    @staticmethod
-    def _safe_json_loads(s):
-        """Parse JSON, retrying with sanitized control characters if the first attempt fails.
-
-        LLMs sometimes emit literal control characters (\\n, \\t, etc.) inside
-        JSON string values, which json.loads rejects with 'Invalid control character'.
-        """
-        try:
-            return json.loads(s)
-        except json.JSONDecodeError:
-            import re
-            _escape_map = {'\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f'}
-            sanitized = re.sub(r'[\x00-\x1f]', lambda m: _escape_map.get(m.group(), ''), s)
-            return json.loads(sanitized)
-
-    @staticmethod
-    def _parse_tool_calls(response_text):
-        """Parse tool calls from response text. Handles three formats:
-        1. Array format: [TOOL_CALLS][{"name": "...", "arguments": {...}}]
-        2. Named format: [TOOL_CALLS]tool_name[ARGS]{"key": "value"}
-        3. Simple format: [TOOL_CALLS]name\n{json} or name{json}
-
-        For LRM responses, pass only the text after [TOOL_CALLS] marker
-        (with any stray [/THINK] already stripped).
-
-        Returns a list of {"name": ..., "arguments": ...} dicts, or empty list on failure.
-        """
-        import re
-
-        # For standard generator, the full response_text contains [TOOL_CALLS]
-        # For LRM, the caller strips the prefix before calling this.
-        if "[TOOL_CALLS]" in response_text:
-            tc_idx = response_text.find("[TOOL_CALLS]")
-            after_tc = response_text[tc_idx + len("[TOOL_CALLS]"):].strip()
-        else:
-            after_tc = response_text.strip()
-
-        tool_calls = []
-
-        if after_tc.startswith('['):
-            # Array format: [{"name": "...", "arguments": {...}}]
-            bracket_count = 1
-            end_idx = 1
-            while end_idx < len(after_tc) and bracket_count > 0:
-                if after_tc[end_idx] == '[':
-                    bracket_count += 1
-                elif after_tc[end_idx] == ']':
-                    bracket_count -= 1
-                end_idx += 1
-            tool_json = after_tc[:end_idx]
-            tool_calls = Generator._safe_json_loads(tool_json)
-
-        elif '[ARGS]' in after_tc:
-            # Named format: name[ARGS]{json}
-            # For standard generator, multiple [TOOL_CALLS]...[ARGS] pairs may exist
-            # For LRM, after_tc already has the marker stripped
-            tool_pattern = re.compile(r'(?:\[TOOL_CALLS\])?([^\[]+)\[ARGS\]')
-            matches = list(tool_pattern.finditer(after_tc))
-
-            for match in matches:
-                tool_name = match.group(1).strip()
-                args_start = match.end()
-                args_part = after_tc[args_start:].strip()
-
-                brace_count = 0
-                end_idx = 0
-                for i, char in enumerate(args_part):
-                    if char == '{':
-                        brace_count += 1
-                    elif char == '}':
-                        brace_count -= 1
-                        if brace_count == 0:
-                            end_idx = i + 1
-                            break
-
-                args_json = args_part[:end_idx] if end_idx > 0 else "{}"
-                tool_args = Generator._safe_json_loads(args_json) if args_json else {}
-                tool_calls.append({"name": tool_name, "arguments": tool_args})
-
-        elif '{' in after_tc:
-            # Simple format: name\n{json} or name{json}
-            brace_idx = after_tc.find('{')
-            tool_name = after_tc[:brace_idx].strip()
-            args_str = after_tc[brace_idx:]
-
-            depth = 0
-            end_idx = 0
-            for i, c in enumerate(args_str):
-                if c == '{':
-                    depth += 1
-                elif c == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end_idx = i + 1
-                        break
-
-            args_json = args_str[:end_idx] if end_idx > 0 else "{}"
-            tool_args = Generator._safe_json_loads(args_json)
-
-            if tool_name:
-                tool_calls.append({"name": tool_name, "arguments": tool_args})
-            elif isinstance(tool_args, dict) and "name" in tool_args:
-                tool_calls.append(tool_args)
-
-        return tool_calls
 
     @staticmethod
     def _execute_tool(tool_name, tool_args, retriever, llm_model=None, llm_tokenizer=None):
@@ -238,21 +29,19 @@ class Generator:
         elif tool_name == "list_available_documents":
             tool_result = retriever.list_available_documents_tool(tool_args.get("filter_keyword", ""))
         elif tool_name == "search_wikipedia":
-            tool_result = Generator.search_wikipedia(tool_args.get("query", ""))
+            tool_result = search_wikipedia(tool_args.get("query", ""))
         elif tool_name == "agentic_generator":
             from RAG_Framework.components.generators import AgenticGenerator
             tool_result = AgenticGenerator.agentic_answer_query(
                 tool_args.get("query", ""), llm_model, llm_tokenizer, retriever)
         elif tool_name == "google_custom_search":
-            tool_result = Generator.google_custom_search(tool_args.get("query", ""))
+            tool_result = google_custom_search(tool_args.get("query", ""))
         elif tool_name == "duckduckgo_search":
-            tool_result = Generator.duckduckgo_search(
-                tool_args.get("query", ""), max(7, tool_args.get("max_results", 7)))
+            tool_result = duckduckgo_search(tool_args.get("query", ""), tool_args.get("max_results"))
         elif tool_name == "fetch_url_content":
-            tool_result = Generator.fetch_url_content(
-                tool_args.get("url", ""), tool_args.get("max_chars", 8000))
+            tool_result = fetch_url_content(tool_args.get("url", ""), tool_args.get("max_chars"))
         elif tool_name == "query_database":
-            from RAG_Framework.components.database import get_sql_connector
+            from RAG_Framework.tools.SQL_database import get_sql_connector
             sql_connector = get_sql_connector()
             if sql_connector is None:
                 tool_result = {"success": False, "error": "SQL databases are not configured"}
@@ -260,14 +49,14 @@ class Generator:
                 tool_result = sql_connector.execute_query(
                     tool_args.get("db_name", ""), tool_args.get("sql_query", ""))
         elif tool_name == "list_databases":
-            from RAG_Framework.components.database import get_sql_connector
+            from RAG_Framework.tools.SQL_database import get_sql_connector
             sql_connector = get_sql_connector()
             if sql_connector is None:
                 tool_result = {"success": False, "error": "SQL databases are not configured"}
             else:
                 tool_result = sql_connector.list_databases()
         elif tool_name == "get_database_schema":
-            from RAG_Framework.components.database import get_sql_connector
+            from RAG_Framework.tools.SQL_database import get_sql_connector
             sql_connector = get_sql_connector()
             if sql_connector is None:
                 tool_result = {"success": False, "error": "SQL databases are not configured"}
@@ -289,7 +78,7 @@ class Generator:
         """
         if stream_callback is None:
             # TODO: i dont like this too much. another approach needs to be done.
-            return Generator._fix_bpe_artifacts(generate(
+            return BPEDecoder.fix_bpe_artifacts(generate(
                 model=model,
                 tokenizer=tokenizer,
                 prompt=prompt,
@@ -329,7 +118,7 @@ class Generator:
             if stop_streaming:
                 continue
 
-            decoded = Generator._decode_tokens(tokenizer, all_tokens)
+            decoded = BPEDecoder.decode_tokens(tokenizer, all_tokens)
             remaining = decoded[emitted:]
             mi = remaining.find(TOOL_MARKER)
 
@@ -348,7 +137,7 @@ class Generator:
                 emitted += safe_len
 
         # Flush remaining after generation ends
-        full_text = Generator._decode_tokens(tokenizer, all_tokens)
+        full_text = BPEDecoder.decode_tokens(tokenizer, all_tokens)
         remaining = full_text[emitted:]
         if not stop_streaming and remaining:
             mi = remaining.find(TOOL_MARKER)
@@ -369,162 +158,6 @@ class Generator:
         summary = generate(llm_model, llm_tokenizer, prompt=prompt, max_tokens=700, verbose=False)
         return summary
     
-    @staticmethod
-    def search_wikipedia(query: str) -> str:
-            """Fetch Wikipedia results with structured data for RAG"""
-            try:
-                import urllib.parse
-                import urllib.request
-                import json
-                # Search for pages
-                encoded_query = urllib.parse.quote(query)
-                search_url = (
-                    f"https://en.wikipedia.org/w/api.php?action=query&list=search"
-                    f"&srsearch={encoded_query}&format=json&srlimit=1&srnamespace=0"
-                )
-                headers = {'User-Agent': 'YourApp/1.0 (contact@example.com)'}
-                search_req = urllib.request.Request(search_url, headers=headers)
-                with urllib.request.urlopen(search_req, timeout=10) as response:
-                    search_data = json.loads(response.read().decode('utf-8'))
-
-                if not search_data.get('query', {}).get('search'):
-                    return {'error': 'No results found'}
-
-                # Get page content
-                page_ids = [str(item['pageid']) for item in search_data['query']['search']]
-                content_url = (
-                    f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info"
-                    f"&pageids={'|'.join(page_ids)}&format=json&explaintext=true"
-                    f"&inprop=url"
-                )
-                content_req = urllib.request.Request(content_url, headers=headers)
-                with urllib.request.urlopen(content_req, timeout=10) as response:
-                    content_data = json.loads(response.read().decode('utf-8'))
-
-                # Structure the results for better LLM understanding
-                articles = []
-                for page_id in page_ids:
-                    page_info = content_data['query']['pages'].get(page_id)
-                    if page_info and 'extract' in page_info:
-                        content = page_info['extract'].strip()
-                        words = content.split()
-                        if len(words) > 2000:
-                            content = ' '.join(words[:2000]) + '... (content truncated to 2000 words)'
-                            wordcount = 2000
-                        else:
-                            wordcount = len(words)
-                        articles.append({
-                            'title': page_info['title'],
-                            'content': content,
-                            'pageid': page_info['pageid'],
-                            'url': page_info.get('fullurl', f"https://en.wikipedia.org/?curid={page_id}"),
-                            'wordcount': wordcount
-                        })
-
-                return {
-                    'query': query,
-                    'articles': articles,
-                    'total_results': len(articles)
-                }
-            except Exception as e:
-                return {'error': str(e)}
-
-    @staticmethod
-    def google_custom_search(query: str) -> str:
-        """Fetch Google Custom Search results"""
-        try:
-            import urllib.parse
-            import urllib.request
-            import json
-
-            if GOOGLE_CX == "YOUR_GOOGLE_CX_HERE":
-                return "Error: Google Custom Search Engine ID (CX) is not configured. Please set GOOGLE_CX in the code."
-
-            encoded_query = urllib.parse.quote(query)
-            search_url = (
-                f"https://www.googleapis.com/customsearch/v1?"
-                f"key={GOOGLE_API_KEY}&cx={GOOGLE_CX}&q={encoded_query}"
-            )
-            
-            with urllib.request.urlopen(search_url, timeout=10) as response:
-                search_data = json.loads(response.read().decode('utf-8'))
-
-            if 'items' not in search_data:
-                return "No results found."
-
-            results = []
-            for item in search_data['items'][:8]: # Limit to top 8 results
-                title = item.get('title', 'No title')
-                snippet = item.get('snippet', 'No snippet')
-                link = item.get('link', 'No link')
-                results.append(f"Title: {title}\nSnippet: {snippet}\nLink: {link}\n")
-
-            return "\n---\n".join(results)
-        except Exception as e:
-            return f"Error performing Google Search: {str(e)}"
-
-    @staticmethod
-    def duckduckgo_search(query: str, max_results: int = 7) -> dict:
-        """Search DuckDuckGo (free, no API key required)."""
-        try:
-            # Try the newer ddgs package first, fallback to duckduckgo_search
-            DDGS = None
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                try:
-                    from duckduckgo_search import DDGS
-                except ImportError:
-                    return {'error': 'DuckDuckGo search requires the ddgs package. Install with: pip install ddgs', 'query': query}
-
-            results = []
-            with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=max_results):
-                    results.append({
-                        'title': r.get('title', ''),
-                        'url': r.get('href', ''),
-                        'snippet': r.get('body', '')
-                    })
-
-            return {'query': query, 'results': results, 'total_results': len(results)}
-        except Exception as e:
-            return {'error': str(e), 'query': query}
-
-    @staticmethod
-    def fetch_url_content(url: str, max_chars: int = 8000) -> dict:
-        """Fetch and extract main text content from a URL."""
-        try:
-            import urllib.request
-            import urllib.parse
-            import re
-
-            # Validate URL
-            parsed = urllib.parse.urlparse(url)
-            if parsed.scheme not in ['http', 'https']:
-                return {'error': 'Invalid URL scheme', 'url': url}
-
-            headers = {'User-Agent': 'Mozilla/5.0 (compatible; RAGBot/1.0)'}
-            request = urllib.request.Request(url, headers=headers)
-
-            with urllib.request.urlopen(request, timeout=15) as response:
-                html = response.read().decode('utf-8', errors='ignore')
-
-            # Strip scripts, styles, nav, header, footer
-            html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL|re.I)
-            html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL|re.I)
-            html = re.sub(r'<(nav|header|footer)[^>]*>.*?</\1>', '', html, flags=re.DOTALL|re.I)
-
-            # Extract text
-            text = re.sub(r'<[^>]+>', ' ', html)
-            text = re.sub(r'\s+', ' ', text).strip()
-
-            if len(text) > max_chars:
-                text = text[:max_chars] + '...'
-
-            return {'url': url, 'content': text, 'char_count': len(text), 'success': True}
-        except Exception as e:
-            return {'error': str(e), 'url': url}
-
     @staticmethod
     def _get_advanced_reasoning_tool():
         """Returns the activate_advanced_reasoning tool definition."""
@@ -636,7 +269,7 @@ class Generator:
             if "[TOOL_CALLS]" in response_text:
                 print(f"\nModel requested to use tools. Processing tool calls...")
                 try:
-                    tool_calls = Generator._parse_tool_calls(response_text)
+                    tool_calls = parse_tool_calls(response_text)
 
                     if not tool_calls:
                         print("No valid tool calls found")

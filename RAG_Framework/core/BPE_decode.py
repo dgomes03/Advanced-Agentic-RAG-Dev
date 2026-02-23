@@ -1,3 +1,11 @@
+"""
+BPE byte-level decoding utilities for GPT-2-style tokenizers.
+
+Single source of truth — import BPEDecoder from here everywhere.
+Previously duplicated across agents/decoder.py, components/generators/standard.py,
+and components/generators/LRM.py.
+"""
+
 _SKIP_SPECIAL = {'<s>', '</s>', '<unk>', '<pad>'}
 
 
@@ -7,6 +15,11 @@ class BPEDecoder:
     Handles tokenizers where the vocabulary uses Ġ (U+0120) as the space
     marker but the decoder expects ▁ (U+2581), which causes tokenizer.decode()
     to strip all spaces from output.
+
+    In byte-level BPE, each byte (0-255) is mapped to a Unicode character.
+    Printable ASCII maps to itself; non-printable bytes (space, newline, etc.)
+    map to characters starting at U+0100 (e.g. space→Ġ, newline→Ċ).
+    The methods here build and use the reverse mapping to recover proper UTF-8.
     """
 
     _byte_decoder = None  # Lazy-initialized inverse of GPT-2 bytes_to_unicode
@@ -45,7 +58,12 @@ class BPEDecoder:
 
     @staticmethod
     def decode_tokens(tokenizer, tokens):
-        """Decode token IDs to text, bypassing tokenizer.decode() entirely."""
+        """Decode token IDs to text, bypassing tokenizer.decode() entirely.
+
+        Handles tokenizers where the BPE vocabulary uses Ġ (U+0120) as the
+        space marker but the decoder expects ▁ (U+2581), which causes
+        tokenizer.decode() to strip all spaces from output.
+        """
         if not tokens:
             return ""
         BPEDecoder.ensure_vocab(tokenizer)
@@ -69,6 +87,7 @@ class BPEDecoder:
             else:
                 for c in tok_str:
                     if c == '\u2581':
+                        # Metaspace ▁ → space byte (handles mixed encoding)
                         byte_buf.append(0x20)
                     elif c in byte_decoder:
                         byte_buf.append(byte_decoder[c])
@@ -84,7 +103,11 @@ class BPEDecoder:
     def fix_bpe_artifacts(text):
         """Post-process a string to fix BPE decoding artifacts.
 
-        Only activates when Ġ (U+0120) or ▁ (U+2581) artifacts are detected.
+        When tokenizer.decode() has a decoder mismatch (e.g. Ministral),
+        generate() returns raw BPE chars like Ġ (space), Ċ (newline),
+        ðŁĺĬ (emoji bytes). Applies the GPT-2 byte decoder char-by-char
+        to recover proper UTF-8 text.
+        Only activates when Ġ (U+0120) or ▁ (U+2581) artifacts are present.
         """
         if '\u0120' not in text and '\u2581' not in text:
             return text

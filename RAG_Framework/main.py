@@ -111,7 +111,7 @@ if __name__ == "__main__":
     # Initialize SQL databases if enabled
     if ENABLE_SQL_DATABASES and SQL_DATABASE_CONFIGS:
         print("\nInitializing SQL databases...")
-        from RAG_Framework.components.database import initialize_sql_connector, DatabaseConfig, DatabaseType
+        from RAG_Framework.tools.SQL_database import initialize_sql_connector, DatabaseConfig, DatabaseType
 
         db_configs = {}
         for db_name, config_dict in SQL_DATABASE_CONFIGS.items():

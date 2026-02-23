@@ -1,6 +1,6 @@
 from mlx_lm.generate import BatchGenerator
 
-from .decoder import BPEDecoder
+from RAG_Framework.core.BPE_decode import BPEDecoder
 
 
 def run_batch_generate(llm_model, llm_tokenizer, prompts, max_tokens,
